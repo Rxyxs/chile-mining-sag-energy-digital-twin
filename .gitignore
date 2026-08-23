@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+.pytest_cache/
+*.egg-info/
+
+# Datos y artefactos generados (se regeneran con los scripts de src/)
+data/processed/*.parquet
+data/processed/*.csv
+data/raw/*.parquet
+data/raw/*.csv
+outputs/models/*.joblib
+outputs/reports/*.json
+outputs/reports/*.csv
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!outputs/models/.gitkeep
+!outputs/reports/.gitkeep
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
