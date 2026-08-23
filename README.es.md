@@ -1,4 +1,4 @@
-[ 🇬🇧 Read in English ](README.md) | [ 🇨🇱 Español ]
+[ 🇺🇸 Read in English ](README.md) | [ 🇨🇱 Español ]
 
 # 1. Título del Proyecto
 
