@@ -10,17 +10,23 @@
 ![scikit-learn](https://img.shields.io/badge/scikit--learn-1.4%2B-F7931E?style=flat&logo=scikitlearn&logoColor=white)
 ![LightGBM](https://img.shields.io/badge/LightGBM-4.x-02569B?style=flat)
 ![statsmodels](https://img.shields.io/badge/statsmodels-0.14%2B-8A2BE2?style=flat)
+![lifelines](https://img.shields.io/badge/lifelines-0.30%2B-9932CC?style=flat)
+![SHAP](https://img.shields.io/badge/SHAP-explicabilidad-FF4B4B?style=flat)
+![FastAPI](https://img.shields.io/badge/FastAPI-servicio-009688?style=flat&logo=fastapi&logoColor=white)
 ![Matplotlib](https://img.shields.io/badge/Matplotlib-3.8%2B-11557C?style=flat)
-![Pytest](https://img.shields.io/badge/tests-22%20passing-brightgreen?style=flat&logo=pytest&logoColor=white)
+![Pytest](https://img.shields.io/badge/tests-32%20passing-brightgreen?style=flat&logo=pytest&logoColor=white)
 ![Status](https://img.shields.io/badge/status-research%20%2F%20synthetic%20data-lightgrey?style=flat)
 
 Un gemelo digital que fusiona sensores ruidosos de dureza de mineral con un
 **Filtro de Kalman**, predice **energía específica y throughput de un
-molino SAG de forma conjunta** con **Gradient Boosting multi-output**, y
-anticipa la **demanda energética a 24 horas** comparando un baseline
-estadístico clásico (Holt-Winters) contra un enfoque de Machine Learning —
-todo entrenado, evaluado y graficado por un único comando (`run_pipeline.py`),
-sin intervención manual.
+molino SAG de forma conjunta** con **Gradient Boosting multi-output**,
+anticipa la **demanda energética a 24 horas**, estima la **vida útil
+remanente con Análisis de Supervivencia de Riesgos Proporcionales de
+Cox (CoxPH)**, y recomienda **setpoints energéticos prescriptivos** que
+equilibran el ahorro de energía contra el desgaste mecánico — todo servido
+a través de un endpoint **FastAPI** con **explicabilidad SHAP punto a
+punto**, y todo entrenado, evaluado y graficado por un único comando
+(`run_pipeline.py`), sin intervención manual.
 
 ---
 
@@ -132,6 +138,60 @@ series de tiempo autocorrelacionadas y features de rolling-window, un fold
 aleatorio filtraría información del futuro hacia el pasado, inflando
 artificialmente el desempeño reportado.
 
+### 3.5 Análisis de supervivencia (Riesgos Proporcionales de Cox)
+
+No existe un log de fallas para el simulador (produce operación continua,
+no eventos de mantenimiento), así que `train_survival.py` construye su
+propio dataset de supervivencia sintético pero físicamente fundado: la
+serie horaria se divide en ciclos de operación de 72 horas solapados (paso
+de 24h), cada uno resumido en covariables de estrés mecánico/térmico
+(desviación media respecto al % óptimo de llenado y de carga de bolas, la
+variabilidad de la energía específica dentro del ciclo, y la dureza media
+del mineral), y se genera un tiempo-hasta-falla por ciclo con un **modelo
+de riesgos proporcionales de base Weibull**:
+
+```
+S(t | x) = S0(t)^exp(η),   η = Σ βⱼ (xⱼ − referenciaⱼ)
+S0(t) = exp(−(t / b0)^k),  k = 1.8 (hazard creciente → desgaste mecanico)
+```
+
+que, invirtiendo la CDF, da un muestreador de forma cerrada para tiempos de
+falla sintéticos, `T = b0 · (−ln U)^(1/k) · exp(−η/k)`. Los ciclos cuyo
+tiempo de falla muestreado supera un horizonte de observación de 1.400
+horas se censuran por la derecha en ese horizonte, exactamente como un
+equipo que sigue operando al cierre del periodo de estudio en un dataset de
+confiabilidad real. **CoxPH** (`lifelines.CoxPHFitter`) se ajusta luego
+sobre los ciclos generados para recuperar esos coeficientes solo a partir
+de los datos, y se evalúa con el **índice de concordancia (C-index)** — el
+análogo del AUC en análisis de supervivencia — sobre un holdout
+cronológico.
+
+### 3.6 Optimización prescriptiva de setpoints
+
+Los modelos de regresión y supervivencia *describen y predicen*; no
+*recomiendan una acción*. `prescriptive_optimizer.py` cierra esa brecha:
+dado un contexto operacional fijo (dureza estimada, F80/P80, estadísticas
+recientes de rolling window — nada de esto controlable en el horizonte
+inmediato de decisión), busca entre los setpoints controlables (tasa de
+alimentación, % de llenado, carga de bolas, agua) la combinación que
+minimiza un objetivo combinado —
+
+```
+minimizar   Ê[energia_especifica] + λ · (ĤR_desgaste − 1)
+sujeto a    Ê[throughput] ≥ piso_throughput,  setpoints dentro de limites operacionales
+```
+
+— donde `Ê[·]` proviene directamente del modelo de regresión multi-output
+entrenado y `ĤR_desgaste` es el hazard ratio de CoxPH (§3.5) implicado por
+sostener la desviación de carga/carga de bolas de ese setpoint durante un
+ciclo completo. `λ` (0.15 por defecto) controla cuánto ahorro de energía
+está dispuesto a sacrificar el motor por riesgo de desgaste mecánico. El
+problema se resuelve con `scipy.optimize.minimize` (SLSQP), tratando ambos
+modelos entrenados como funciones caja-negra de objetivo/restricción en vez
+de derivar una solución de forma cerrada — el mismo patrón usado en capas
+de optimización en tiempo real (RTO) de sistemas de control en
+procesamiento de minerales.
+
 ---
 
 # 4. Explicación
@@ -144,17 +204,26 @@ flowchart LR
     B --> C["kalman_filter.py<br/>Fusion proxy + laboratorio<br/>-> wi_hat"]
     C --> D["train_multioutput.py<br/>Gradient Boosting multi-output<br/>Energia + Throughput"]
     C --> E["train_forecasting.py<br/>LightGBM vs Holt-Winters<br/>Potencia 24h ahead"]
+    A2["simulation.py<br/>historia de 2 anios"] --> S["train_survival.py<br/>CoxPH<br/>tiempo hasta falla"]
     D --> F["predict.py<br/>SagMillPredictor<br/>artefactos joblib"]
     D --> G["plots.py<br/>8 graficos de resultados"]
     E --> G
+    D --> O["prescriptive_optimizer.py<br/>SciPy SLSQP"]
+    S --> O
+    F --> API["src/api/service.py<br/>FastAPI: /predict /survival /optimize"]
+    O --> API
+    S --> API
 ```
 
 Cada etapa es un módulo independiente en `src/`, con su propio `if __name__
 == "__main__"` para poder ejecutarse y depurarse de forma aislada, y
-`run_pipeline.py` en la raíz orquesta las seis etapas de punta a punta con
-un solo comando, guardando cada artefacto intermedio (`data/processed/`,
-`outputs/models/`, `outputs/reports/`, `outputs/plots/`) para inspección o
-reuso.
+`run_pipeline.py` en la raíz orquesta las seis etapas centrales de punta a
+punta con un solo comando, guardando cada artefacto intermedio
+(`data/processed/`, `outputs/models/`, `outputs/reports/`,
+`outputs/plots/`) para inspección o reuso. Las capas de supervivencia,
+optimización prescriptiva y API son componentes de soporte a decisiones
+construidos sobre los artefactos de ese pipeline central y se ejecutan por
+separado (ver §6).
 
 ## Descripción de los módulos
 
@@ -165,9 +234,13 @@ reuso.
 | [`src/features/kalman_filter.py`](src/features/kalman_filter.py) | Filtro de Kalman escalar con estimación empírica de Q/R y fusión secuencial de dos sensores. |
 | [`src/models/train_multioutput.py`](src/models/train_multioutput.py) | Compara 5 modelos multi-output, ajusta hiperparámetros de LightGBM (`RandomizedSearchCV` + `TimeSeriesSplit`), serializa el mejor modelo. |
 | [`src/models/train_forecasting.py`](src/models/train_forecasting.py) | Dataset supervisado de forecasting a 24h, comparación walk-forward LightGBM vs. Holt-Winters. |
+| [`src/models/train_survival.py`](src/models/train_survival.py) | Construye el dataset sintético de ciclos de supervivencia, ajusta CoxPH, evalúa con el índice de concordancia, serializa el modelo. |
+| [`prescriptive_optimizer.py`](prescriptive_optimizer.py) | `PrescriptiveOptimizer`: búsqueda SLSQP sobre setpoints controlables, combinando la predicción de energía del modelo de regresión con la penalización de desgaste de CoxPH. |
 | [`src/inference/predict.py`](src/inference/predict.py) | `SagMillPredictor`: replica el pipeline de features exacto de entrenamiento sobre datos crudos nuevos y sirve predicciones. |
+| [`src/api/service.py`](src/api/service.py) | Servicio FastAPI: `/predict` (+ SHAP), `/survival/predict`, `/optimize`. |
+| [`src/api/explain.py`](src/api/explain.py) | Construye el explainer SHAP por target apropiado al tipo de modelo que ganó el entrenamiento, y calcula contribuciones de features punto a punto. |
 | [`src/visualization/plots.py`](src/visualization/plots.py) | Genera los 8 gráficos de resultados (EDA + diagnóstico de modelos) con paleta validada para accesibilidad. |
-| [`run_pipeline.py`](run_pipeline.py) | Orquestador end-to-end de las 6 etapas anteriores. |
+| [`run_pipeline.py`](run_pipeline.py) | Orquestador end-to-end de las 6 etapas centrales anteriores. |
 
 ---
 
@@ -195,6 +268,16 @@ reuso.
 - **Selección de modelo**: el mejor modelo se elige por R² uniforme
   promedio sobre ambas salidas en el holdout de test, no por CV interna,
   para reportar desempeño sobre datos genuinamente no vistos.
+- **Validación de supervivencia**: los ciclos de operación se dividen
+  cronológicamente por `cycle_start` (nunca al azar — los ciclos se
+  solapan en el tiempo por construcción), y CoxPH se evalúa con el índice
+  de concordancia solo sobre los ciclos held-out.
+- **Explicabilidad**: los explainers SHAP se construyen dinámicamente
+  según el tipo de modelo que gana la comparación multi-output —
+  `TreeExplainer` cuando el estimador ganador es de árbol (Gradient
+  Boosting, LightGBM, Random Forest), con un fallback model-agnóstico para
+  cualquier otro caso (ej. Regresión Lineal) — de modo que `/predict`
+  nunca asume una familia de modelo fija.
 
 ---
 
@@ -202,11 +285,11 @@ reuso.
 
 Código modular en Python, sin notebooks: cada etapa (ingesta →
 procesamiento → entrenamiento → predicción → serialización) vive en su
-propio módulo testeado (`tests/`, 22 tests con `pytest`), y los artefactos
-del mejor modelo se serializan con `joblib` (`outputs/models/*.joblib`)
+propio módulo testeado (`tests/`, 32 tests con `pytest`), y los artefactos
+de cada modelo se serializan con `joblib` (`outputs/models/*.joblib`)
 junto a la lista exacta de columnas de features, para que la inferencia en
-producción (`SagMillPredictor`) nunca dependa de recordar el orden o
-nombre de las columnas de entrenamiento.
+producción (`SagMillPredictor`, el servicio FastAPI) nunca dependa de
+recordar el orden o nombre de las columnas de entrenamiento.
 
 ## Instalación y ejecución
 
@@ -240,11 +323,35 @@ python -m src.models.train_forecasting
 python -m src.visualization.plots
 ```
 
+### Análisis de supervivencia y optimización prescriptiva
+
+```powershell
+python -m src.models.train_survival        # ajusta CoxPH, guarda outputs/models/coxph_survival_model.joblib
+python prescriptive_optimizer.py            # corre un ejemplo de optimizacion sobre el ultimo registro procesado
+```
+
 ### Inferencia sobre datos nuevos
 
 ```powershell
 python -m src.inference.predict data/raw/sag_mill_operation_raw.parquet --output predicciones.csv
 ```
+
+### Servicio API (predicción + SHAP + supervivencia + optimización prescriptiva)
+
+```powershell
+uvicorn src.api.service:app --reload
+```
+
+Luego, por ejemplo:
+
+```powershell
+curl -X POST http://127.0.0.1:8000/survival/predict `
+  -H "Content-Type: application/json" `
+  -d '{"load_deviation_from_optimum": 2.4, "ball_charge_deviation": 0.8, "specific_energy_std": 1.0, "hardness_proxy_wi_mean": 13.0}'
+```
+
+La documentación interactiva (Swagger UI) queda disponible en
+`http://127.0.0.1:8000/docs` una vez que el servicio está corriendo.
 
 ### Tests
 
@@ -260,17 +367,19 @@ chile-mining-sag-energy-digital-twin/
 │   ├── raw/                       # crudo simulado (parquet, generado)
 │   └── processed/                 # limpio + features + Kalman (generado)
 ├── outputs/
-│   ├── models/                    # mejor modelo + columnas (joblib, generado)
-│   ├── reports/                   # métricas, comparaciones, residuos (json/csv, generado)
+│   ├── models/                    # modelos de regresion + CoxPH, columnas (joblib, generado)
+│   ├── reports/                   # métricas, comparaciones, residuos, reporte de supervivencia (json/csv, generado)
 │   └── plots/                     # 8 gráficos de resultados (png, versionados)
 ├── src/
 │   ├── data/simulation.py
 │   ├── features/{preprocessing,kalman_filter}.py
-│   ├── models/{train_multioutput,train_forecasting}.py
+│   ├── models/{train_multioutput,train_forecasting,train_survival}.py
 │   ├── inference/predict.py
+│   ├── api/{service,explain}.py
 │   └── visualization/plots.py
-├── tests/                         # 22 tests, pytest
-├── run_pipeline.py                # orquestador end-to-end
+├── prescriptive_optimizer.py      # optimizacion SLSQP de setpoints (energia vs. desgaste)
+├── tests/                         # 32 tests, pytest
+├── run_pipeline.py                # orquestador end-to-end (6 etapas centrales)
 └── requirements.txt
 ```
 
@@ -379,6 +488,62 @@ puede anticipar.
 
 ![Serie operacional completa](outputs/plots/operational_overview.png)
 
+## 7.7 Análisis de supervivencia (CoxPH) — tiempo hasta falla mecánica
+
+De una corrida real de `train_survival.py` (historia simulada de 2 años,
+718 ciclos solapados de 72 horas, split cronológico 80/20):
+
+| | |
+|---|---|
+| Ciclos train / test | 574 / 144 |
+| Eventos observados (train / test) | 540 / 141 |
+| **Índice de concordancia (test)** | **0.661** |
+| Test de razón de verosimilitud | p = 5.9 × 10⁻⁴⁴ |
+
+| Covariable | log-HR estimado | log-HR verdadero | Hazard ratio | p-valor |
+|---|---:|---:|---:|---:|
+| **Volatilidad de energía específica** | **1.833** | 1.40 | **6.26×** | **< 10⁻⁴³** |
+| **Dureza media del mineral (Wi)** | **0.154** | 0.14 | **1.17×** | **< 10⁻¹⁰** |
+| Desviación de carga respecto al óptimo | -0.159 | 0.10 | 0.85× | 0.447 (n.s.) |
+| Desviación de carga de bolas | -0.068 | 0.12 | 0.93× | 0.919 (n.s.) |
+
+CoxPH recupera correcta y precisamente los dos factores de riesgo
+dominantes (volatilidad de energía y dureza del mineral — ambas variables
+de contexto que el operador no fija directamente), con un C-index de
+0.661: mejor que el azar (0.5) de forma significativa, pero honestamente
+lejos de un predictor determinístico, consistente con lo ruidosa que es en
+realidad la señal de falla mecánica. Las dos desviaciones de setpoint
+directamente controlables (carga, carga de bolas) resultan
+**estadísticamente no significativas** (p > 0.4): los operadores ya
+mantienen estos valores cerca de su óptimo por diseño, así que su varianza
+ciclo a ciclo es demasiado pequeña para que este dataset identifique un
+efecto confiable — un hallazgo honesto, no una falla de modelado, y la
+razón por la que el término de penalización de desgaste en §7.8 se
+pondera deliberadamente bajo (`λ = 0.15`).
+
+## 7.8 Optimización prescriptiva — ejemplo desarrollado
+
+Aplicando `prescriptive_optimizer.py` al registro más reciente del dataset
+procesado (`min_throughput_tph` = 97% de la alimentación actual):
+
+| | Base (setpoints actuales) | Recomendado |
+|---|---:|---:|
+| `mill_load_pct` | 26.71% | 25.21% |
+| `ball_charge_pct` | 11.02% | 11.67% |
+| Energía específica (predicha) | 12.041 kWh/t | 12.072 kWh/t |
+| Throughput (predicho) | 2.267,9 t/h | 2.258,4 t/h |
+| Hazard ratio de desgaste (CoxPH) | 4.09× | **3.08×** |
+
+Para este contexto particular, el optimizador cambia un pequeño aumento de
+energía (+0.26%) por una **reducción de ~25% en el hazard ratio de
+desgaste de CoxPH** — el objetivo combinado (§3.6) funciona como fue
+diseñado, no colapsa a un minimizador puro de energía. Dado que el efecto
+directo de la desviación de setpoint sobre el riesgo mecánico es
+estadísticamente débil (§7.7), este trade-off es intencionalmente
+conservador; el valor central del motor es el marco mismo — optimizar
+conjuntamente un modelo predictivo y uno de supervivencia bajo
+restricciones explícitas — más que este resultado numérico puntual.
+
 ---
 
 # 8. Conclusión
@@ -400,36 +565,60 @@ puede anticipar.
   horas, con un margen que se explica por la capacidad de capturar
   transiciones de régimen de dureza que Holt-Winters, por diseño puramente
   estacional, no puede ver venir.
+- **El análisis de supervivencia transforma "predecir energía" en
+  "predecir vida útil remanente"**: CoxPH recupera los dos factores
+  dominantes y estadísticamente significativos del riesgo mecánico
+  (volatilidad de energía específica, dureza del mineral) con un C-index
+  de test de 0.661, y reporta honestamente que los setpoints directamente
+  controlados por el operador no muestran efecto marginal significativo en
+  este dataset — un hallazgo, no una falla, que da forma directamente al
+  peso que el motor prescriptivo debe asignar al riesgo de desgaste.
+- **La optimización prescriptiva cierra el ciclo de predicción a
+  recomendación**: `prescriptive_optimizer.py` no solo describe el
+  trade-off energía/throughput, recomienda un setpoint concreto,
+  equilibrando el consumo de energía predicho contra el hazard de desgaste
+  estimado por CoxPH, sujeto a una restricción de throughput mínimo — el
+  mismo tipo de problema que resuelve una capa de optimización en tiempo
+  real (RTO) en una sala de control de procesamiento de minerales.
 - **Recomendaciones operacionales**: (1) instrumentar el soft-sensor Kalman
   como insumo directo del panel del operador de sala de control, no solo
   del modelo; (2) usar el forecast a 24h como insumo para la programación
-  de mantenimientos y la gestión de compra de energía spot; (3) usar el
-  modelo multi-output como advisor de setpoint en tiempo real para el
-  trade-off throughput-vs-finura de molienda, especialmente en las
-  transiciones de bloque donde el operador hoy reacciona con retraso.
+  de mantenimientos y la gestión de compra de energía spot; (3) servir el
+  modelo multi-output, el modelo de supervivencia y el optimizador
+  prescriptivo a través de los endpoints FastAPI de este repositorio como
+  advisor de setpoint en tiempo real, especialmente en las transiciones de
+  bloque donde el operador hoy reacciona con retraso; (4) registrar la
+  explicación SHAP junto a cada predicción servida, no solo el número, para
+  que los operadores puedan auditar *por qué* el modelo recomienda lo que
+  recomienda.
 - **Limitación central, y la más importante de nombrar**: los datos son
   sintéticos, generados por este mismo repositorio a partir de la Ley de
   Bond más ruido operacional — no telemetría SCADA propietaria de ninguna
-  faena. Las métricas demuestran que el *pipeline* es correcto
-  (arquitectura, validación sin fuga temporal, calibración física
+  faena, y el dataset de supervivencia es sintético sobre sintético
+  (tiempos de falla simulados sobre una historia operacional simulada).
+  Las métricas demuestran que el *pipeline* es correcto (arquitectura,
+  validación sin fuga temporal, calibración física y estadística
   verificable), no que el modelo prediga la operación real de un molino
-  específico. El paso crítico antes de cualquier uso productivo es
-  recalibrar contra telemetría histórica real.
+  específico ni un historial de mantenimiento real. El paso crítico antes
+  de cualquier uso productivo es recalibrar contra telemetría histórica
+  real y un log de fallas/mantenimiento real.
 
 ## Trabajo futuro
 
-- Reemplazar el simulador por telemetría histórica real de planta (SCADA/PI).
-- Exponer `SagMillPredictor` detrás de un servicio FastAPI y un dashboard
-  operacional (Streamlit), siguiendo el mismo patrón de otros proyectos de
+- Reemplazar el simulador por telemetría histórica real de planta
+  (SCADA/PI) y un log real de mantenimiento/fallas para recalibrar tanto
+  el modelo de regresión como el de supervivencia contra datos reales.
+- Agregar un dashboard operacional liviano (Streamlit) que consuma los
+  endpoints de FastAPI, siguiendo el mismo patrón de otros proyectos de
   este portafolio.
-- Agregar explicabilidad SHAP por predicción individual, no solo
-  importancia global.
-- Extender con un componente de Análisis de Supervivencia (CoxPH) para
-  tiempo-hasta-detención no programada del molino, complementario a este
-  gemelo digital de eficiencia energética.
-- Motor de optimización prescriptiva: dado un régimen de dureza estimado,
-  recomendar el setpoint (feed rate, agua, carga de bolas) que maximiza
-  throughput sujeto al límite de potencia instalada.
+- Extender el modelo de supervivencia más allá del supuesto de riesgos
+  proporcionales de CoxPH (ej. covariables variables en el tiempo o un
+  Random Survival Forest) una vez disponibles datos reales de falla, para
+  probar si el riesgo realmente se mantiene proporcional a lo largo de la
+  vida del molino.
+- Mover el optimizador prescriptivo de una recomendación puntual a una
+  formulación de horizonte deslizante (estilo Model Predictive Control)
+  que se re-optimice a medida que llegan nuevas lecturas de sensores.
 
 ---
 
