@@ -62,6 +62,15 @@ illustrative (it is not any specific site's ROI); the point is that in
 comminution, fractions of a percentage point of energy efficiency are real
 money, not a rounding error.
 
+## 2.1 Business Impact & Key Performance Indicators
+
+| Metric | Result | What it means |
+|---|---|---|
+| Best multi-output model (specific energy + throughput) | Gradient Boosting, R² 0.803 avg | Beat even hyperparameter-tuned LightGBM -- an empirical result, not assumed in advance |
+| 24h-ahead energy demand forecast | LightGBM RMSE 2.767 MW vs. Holt-Winters 3.822 MW | **27.6%** RMSE reduction, **33.5%** MAPE reduction -- lags capture hardness-regime transitions a seasonal-only model can't |
+| Illustrative annual value of 1% efficiency gain | ~USD 155,000/year per SAG line | On an estimated ~USD 15.5M/year energy bill for a single line -- fractions of a percent are real money in comminution |
+| Real calibration bug caught and fixed | P80 parameter miscalibration (57% of values clipped) → fixed | Traced via a residual-plot diagonal artifact; balanced R² split 0.58/0.94 → 0.80/0.81 after the fix |
+
 ---
 
 # 3. Theoretical Framework

@@ -25,3 +25,5 @@ outputs/reports/*.csv
 .vscode/
 .idea/
 .DS_Store
+CLAUDE.md
+.claude/

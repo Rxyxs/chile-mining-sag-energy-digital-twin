@@ -64,6 +64,15 @@ deliberadamente ilustrativa (no es el ROI de ninguna faena específica); el
 punto es que en conminución, fracciones de punto porcentual de eficiencia
 energética son dinero real, no un decimal cosmético.
 
+## 2.1 Impacto de Negocio e Indicadores Clave (KPIs)
+
+| Métrica | Resultado | Qué significa |
+|---|---|---|
+| Mejor modelo multi-output (energía específica + throughput) | Gradient Boosting, R² 0,803 promedio | Le ganó incluso a LightGBM afinado con hiperparámetros -- un resultado empírico, no asumido de antemano |
+| Pronóstico de demanda energética a 24h | LightGBM RMSE 2,767 MW vs. Holt-Winters 3,822 MW | **27,6%** de reducción en RMSE, **33,5%** en MAPE -- los lags capturan transiciones de régimen de dureza que un modelo solo-estacional no puede |
+| Valor anual ilustrativo de una mejora de 1% en eficiencia | ~USD 155.000/año por línea SAG | Sobre un gasto energético estimado de ~USD 15,5M/año para una sola línea -- fracciones de porcentaje son dinero real en conminución |
+| Bug real de calibración detectado y corregido | Parámetro P80 mal calibrado (57% de valores en el clip) → corregido | Rastreado vía un artefacto diagonal en el gráfico de residuos; split de R² balanceado 0,58/0,94 → 0,80/0,81 tras la corrección |
+
 ---
 
 # 3. Marco Teórico
