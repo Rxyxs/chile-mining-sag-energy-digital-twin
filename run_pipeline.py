@@ -15,6 +15,8 @@ import pandas as pd
 from src.data.simulation import simulate_sag_mill_operation
 from src.features.kalman_filter import add_kalman_hardness_estimate
 from src.features.preprocessing import run_preprocessing_pipeline
+from src.models.duckdb_store import DB_FILENAME, persist_model_comparison
+from src.models.train_deep_energy import compare_against_tree_benchmark, run_activation_comparison
 from src.models.train_forecasting import run_forecasting_pipeline
 from src.models.train_multioutput import run_training_pipeline
 from src.visualization.plots import generate_all_plots
@@ -30,16 +32,16 @@ def main():
     for d in (raw_dir, processed_dir, models_dir, reports_dir):
         d.mkdir(parents=True, exist_ok=True)
 
-    print("[1/6] Simulando operacion del molino SAG (180 dias horarios)...")
+    print("[1/8] Simulando operacion del molino SAG (180 dias horarios)...")
     raw = simulate_sag_mill_operation()
     raw.to_parquet(raw_dir / "sag_mill_operation_raw.parquet", index=False)
     print(f"       {len(raw)} registros generados.")
 
-    print("[2/6] Preprocesamiento: outliers, imputacion, feature engineering...")
+    print("[2/8] Preprocesamiento: outliers, imputacion, feature engineering...")
     processed = run_preprocessing_pipeline(raw)
     processed.to_parquet(processed_dir / "sag_mill_operation_clean.parquet", index=False)
 
-    print("[3/6] Filtro de Kalman: fusion de sensores de dureza...")
+    print("[3/8] Filtro de Kalman: fusion de sensores de dureza...")
     with_kf = add_kalman_hardness_estimate(processed)
     with_kf.to_parquet(processed_dir / "sag_mill_operation_with_kf.parquet", index=False)
 
@@ -49,16 +51,34 @@ def main():
     print(f"       RMSE proxy crudo: {proxy_rmse:.3f} | RMSE Kalman: {kf_rmse:.3f} "
           f"({(1 - kf_rmse / proxy_rmse) * 100:.1f}% de reduccion de error)")
 
-    print("[4/6] Entrenando modelos multi-output (energia especifica + throughput)...")
+    print("[4/8] Entrenando modelos multi-output (energia especifica + throughput)...")
     multioutput_report = run_training_pipeline(with_kf, models_dir, tune=True)
     print(f"       Mejor modelo: {multioutput_report['best_model']}")
 
-    print("[5/6] Entrenando y comparando modelos de forecasting (24h ahead)...")
+    print("[5/8] Entrenando y comparando modelos de forecasting (24h ahead)...")
     forecasting_report = run_forecasting_pipeline(with_kf, reports_dir)
     print(f"       LightGBM RMSE: {forecasting_report['lightgbm']['summary']['rmse_mean']:.3f} MW | "
           f"Holt-Winters RMSE: {forecasting_report['holt_winters']['summary']['rmse_mean']:.3f} MW")
 
-    print("[6/6] Generando graficos de resultados...")
+    print("[6/8] Entrenando MLP en PyTorch (surrogate model, ReLU/GELU/Swish)...")
+    deep_report = run_activation_comparison(with_kf, models_dir)
+    print(f"       Mejor activacion: {deep_report['best_activation']}")
+
+    deep_vs_tree = compare_against_tree_benchmark(
+        deep_report, reports_dir / "multioutput_model_comparison.json"
+    )
+    with open(reports_dir / "deep_vs_tree_benchmark.json", "w") as f:
+        json.dump(deep_vs_tree, f, indent=2)
+
+    print("[7/8] Persistiendo comparacion de modelos en DuckDB...")
+    n_rows = persist_model_comparison(
+        reports_dir / "multioutput_model_comparison.json",
+        reports_dir / "deep_learning_activation_comparison.json",
+        reports_dir / DB_FILENAME,
+    )
+    print(f"       {n_rows} filas persistidas en outputs/reports/{DB_FILENAME}")
+
+    print("[8/8] Generando graficos de resultados...")
     generate_all_plots(BASE_DIR)
 
     summary = {
@@ -69,6 +89,9 @@ def main():
         "multioutput_metrics": multioutput_report["metrics"][multioutput_report["best_model"]],
         "forecasting_lightgbm": forecasting_report["lightgbm"]["summary"],
         "forecasting_holt_winters": forecasting_report["holt_winters"]["summary"],
+        "deep_learning_best_activation": deep_report["best_activation"],
+        "deep_learning_metrics": deep_report["metrics"][deep_report["best_activation"]],
+        "deep_vs_tree_benchmark": deep_vs_tree,
     }
     with open(reports_dir / "pipeline_summary.json", "w") as f:
         json.dump(summary, f, indent=2)

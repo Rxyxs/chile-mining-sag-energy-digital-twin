@@ -9,12 +9,14 @@
 ![Pandas](https://img.shields.io/badge/Pandas-2.x-150458?style=flat&logo=pandas&logoColor=white)
 ![scikit-learn](https://img.shields.io/badge/scikit--learn-1.4%2B-F7931E?style=flat&logo=scikitlearn&logoColor=white)
 ![LightGBM](https://img.shields.io/badge/LightGBM-4.x-02569B?style=flat)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.x-EE4C2C?style=flat&logo=pytorch&logoColor=white)
+![DuckDB](https://img.shields.io/badge/DuckDB-1.x-FFF000?style=flat&logo=duckdb&logoColor=black)
 ![statsmodels](https://img.shields.io/badge/statsmodels-0.14%2B-8A2BE2?style=flat)
 ![lifelines](https://img.shields.io/badge/lifelines-0.30%2B-9932CC?style=flat)
 ![SHAP](https://img.shields.io/badge/SHAP-explicabilidad-FF4B4B?style=flat)
 ![FastAPI](https://img.shields.io/badge/FastAPI-servicio-009688?style=flat&logo=fastapi&logoColor=white)
 ![Matplotlib](https://img.shields.io/badge/Matplotlib-3.8%2B-11557C?style=flat)
-![Pytest](https://img.shields.io/badge/tests-32%20passing-brightgreen?style=flat&logo=pytest&logoColor=white)
+![Pytest](https://img.shields.io/badge/tests-40%20passing-brightgreen?style=flat&logo=pytest&logoColor=white)
 ![Status](https://img.shields.io/badge/status-research%20%2F%20synthetic%20data-lightgrey?style=flat)
 
 Un gemelo digital que fusiona sensores ruidosos de dureza de mineral con un
@@ -25,8 +27,13 @@ remanente con Análisis de Supervivencia de Riesgos Proporcionales de
 Cox (CoxPH)**, y recomienda **setpoints energéticos prescriptivos** que
 equilibran el ahorro de energía contra el desgaste mecánico — todo servido
 a través de un endpoint **FastAPI** con **explicabilidad SHAP punto a
-punto**, y todo entrenado, evaluado y graficado por un único comando
-(`run_pipeline.py`), sin intervención manual.
+punto**. Un tercer enfoque de modelado, independiente de los anteriores —
+un **MLP en PyTorch** entrenado con un loss Huber normalizado por objetivo
+y comparado entre activaciones ReLU/GELU/Swish — valida cruzadamente al
+ensamble de árboles como surrogate model, con todas las métricas
+comparativas persistidas en **DuckDB**. Todo entrenado, evaluado y
+graficado por un único comando (`run_pipeline.py`), sin intervención
+manual.
 
 ---
 
@@ -201,6 +208,36 @@ de derivar una solución de forma cerrada — el mismo patrón usado en capas
 de optimización en tiempo real (RTO) de sistemas de control en
 procesamiento de minerales.
 
+### 3.7 MLP en PyTorch — surrogate model y benchmark de activaciones
+
+El ensamble de árboles del §3.3 es el modelo de producción; `train_deep_energy.py`
+agrega un tercer enfoque de modelado independiente sobre **las mismas
+features, los mismos targets, la misma particion cronologica** — un MLP
+feed-forward (dos capas ocultas, 64 → 32 unidades) entrenado en PyTorch —
+para (a) verificar cruzadamente el ensamble de árboles contra una familia
+de funciones fundamentalmente distinta, y (b) medir cuanto importa la
+funcion de activacion en este problema tabular, ya que la literatura no da
+una respuesta unica de antemano para una regresion tabular pequena-mediana.
+
+El loss es un **Huber normalizado por objetivo**: `throughput_tph` vive en
+una escala de ~100 t/h y `specific_energy_kwh_t` en ~15 kWh/t, por lo que
+residuos crudos dejarian que throughput domine el gradiente y la red
+subajustaria energia. Los residuos se dividen por el desvio estandar de
+cada target en train antes de aplicar `smooth_l1_loss`, lo que mantiene
+ambos objetivos ponderados de forma comparable manteniendo la robustez a
+outliers (horas de dureza de mineral extrema) propia de Huber:
+
+```
+resid_norm = (pred − target) / std(target | train)
+loss = SmoothL1(resid_norm, 0)     # = Huber, β=1.0
+```
+
+Tres activaciones —**ReLU**, **GELU**, **Swish (SiLU)**— se entrenan con
+arquitectura, optimizador (Adam), presupuesto de epocas y semilla
+identicos, y se comparan en RMSE/MAE/R² de test por objetivo; la mejor se
+persiste y se compara contra el mejor modelo del ensamble de árboles como
+par surrogate/validacion, no como reemplazo (§7.9).
+
 ---
 
 # 4. Explicación
@@ -244,12 +281,14 @@ separado (ver §6).
 | [`src/models/train_multioutput.py`](src/models/train_multioutput.py) | Compara 5 modelos multi-output, ajusta hiperparámetros de LightGBM (`RandomizedSearchCV` + `TimeSeriesSplit`), serializa el mejor modelo. |
 | [`src/models/train_forecasting.py`](src/models/train_forecasting.py) | Dataset supervisado de forecasting a 24h, comparación walk-forward LightGBM vs. Holt-Winters. |
 | [`src/models/train_survival.py`](src/models/train_survival.py) | Construye el dataset sintético de ciclos de supervivencia, ajusta CoxPH, evalúa con el índice de concordancia, serializa el modelo. |
+| [`src/models/train_deep_energy.py`](src/models/train_deep_energy.py) | MLP en PyTorch como surrogate model para los mismos targets multi-output; loss Huber normalizado por objetivo, comparación de activaciones ReLU/GELU/Swish, benchmark contra el ensamble de árboles. |
+| [`src/models/duckdb_store.py`](src/models/duckdb_store.py) | Persiste las métricas comparativas del ensamble de árboles y del deep learning en una tabla DuckDB local (`outputs/reports/model_metrics.duckdb`) para análisis SQL entre modelos. |
 | [`prescriptive_optimizer.py`](prescriptive_optimizer.py) | `PrescriptiveOptimizer`: búsqueda SLSQP sobre setpoints controlables, combinando la predicción de energía del modelo de regresión con la penalización de desgaste de CoxPH. |
 | [`src/inference/predict.py`](src/inference/predict.py) | `SagMillPredictor`: replica el pipeline de features exacto de entrenamiento sobre datos crudos nuevos y sirve predicciones. |
 | [`src/api/service.py`](src/api/service.py) | Servicio FastAPI: `/predict` (+ SHAP), `/survival/predict`, `/optimize`. |
 | [`src/api/explain.py`](src/api/explain.py) | Construye el explainer SHAP por target apropiado al tipo de modelo que ganó el entrenamiento, y calcula contribuciones de features punto a punto. |
-| [`src/visualization/plots.py`](src/visualization/plots.py) | Genera los 8 gráficos de resultados (EDA + diagnóstico de modelos) con paleta validada para accesibilidad. |
-| [`run_pipeline.py`](run_pipeline.py) | Orquestador end-to-end de las 6 etapas centrales anteriores. |
+| [`src/visualization/plots.py`](src/visualization/plots.py) | Genera los gráficos de resultados (EDA + diagnóstico de modelos, incl. curvas de activación del deep learning y benchmark surrogate) con paleta validada para accesibilidad. |
+| [`run_pipeline.py`](run_pipeline.py) | Orquestador end-to-end: simulación, preprocesamiento, Kalman, entrenamiento multi-output, forecasting, surrogate MLP en PyTorch, persistencia en DuckDB y gráficos. |
 
 ---
 
@@ -294,7 +333,7 @@ separado (ver §6).
 
 Código modular en Python, sin notebooks: cada etapa (ingesta →
 procesamiento → entrenamiento → predicción → serialización) vive en su
-propio módulo testeado (`tests/`, 32 tests con `pytest`), y los artefactos
+propio módulo testeado (`tests/`, 40 tests con `pytest`), y los artefactos
 de cada modelo se serializan con `joblib` (`outputs/models/*.joblib`)
 junto a la lista exacta de columnas de features, para que la inferencia en
 producción (`SagMillPredictor`, el servicio FastAPI) nunca dependa de
@@ -318,8 +357,10 @@ python run_pipeline.py
 
 Simula 4,320 registros horarios (180 días), preprocesa, corre el Filtro de
 Kalman, entrena y compara los 5 modelos multi-output (con búsqueda de
-hiperparámetros), entrena y compara el forecasting, y genera los 8 gráficos
-de resultados — todo en una sola corrida.
+hiperparámetros), entrena y compara el forecasting, entrena el surrogate MLP
+en PyTorch (3 activaciones), persiste todas las métricas comparativas en
+DuckDB, y genera todos los gráficos de resultados — todo en una sola
+corrida.
 
 ### Etapas individuales (para depuración)
 
@@ -329,6 +370,8 @@ python -m src.features.preprocessing
 python -m src.features.kalman_filter
 python -m src.models.train_multioutput
 python -m src.models.train_forecasting
+python -m src.models.train_deep_energy    # surrogate MLP en PyTorch (ReLU/GELU/Swish)
+python -m src.models.duckdb_store         # persiste metricas comparativas en DuckDB
 python -m src.visualization.plots
 ```
 
@@ -376,19 +419,19 @@ chile-mining-sag-energy-digital-twin/
 │   ├── raw/                       # crudo simulado (parquet, generado)
 │   └── processed/                 # limpio + features + Kalman (generado)
 ├── outputs/
-│   ├── models/                    # modelos de regresion + CoxPH, columnas (joblib, generado)
-│   ├── reports/                   # métricas, comparaciones, residuos, reporte de supervivencia (json/csv, generado)
-│   └── plots/                     # 8 gráficos de resultados (png, versionados)
+│   ├── models/                    # modelos de regresion + CoxPH + artefactos MLP PyTorch (joblib/.pt, generado)
+│   ├── reports/                   # métricas, comparaciones, residuos, reporte de supervivencia, archivo DuckDB (generado)
+│   └── plots/                     # gráficos de resultados (png, versionados)
 ├── src/
 │   ├── data/simulation.py
 │   ├── features/{preprocessing,kalman_filter}.py
-│   ├── models/{train_multioutput,train_forecasting,train_survival}.py
+│   ├── models/{train_multioutput,train_forecasting,train_survival,train_deep_energy,duckdb_store}.py
 │   ├── inference/predict.py
 │   ├── api/{service,explain}.py
 │   └── visualization/plots.py
 ├── prescriptive_optimizer.py      # optimizacion SLSQP de setpoints (energia vs. desgaste)
-├── tests/                         # 32 tests, pytest
-├── run_pipeline.py                # orquestador end-to-end (6 etapas centrales)
+├── tests/                         # 40 tests, pytest
+├── run_pipeline.py                # orquestador end-to-end (8 etapas)
 └── requirements.txt
 ```
 
@@ -552,6 +595,49 @@ estadísticamente débil (§7.7), este trade-off es intencionalmente
 conservador; el valor central del motor es el marco mismo — optimizar
 conjuntamente un modelo predictivo y uno de supervivencia bajo
 restricciones explícitas — más que este resultado numérico puntual.
+
+## 7.9 Surrogate MLP en PyTorch — comparación de activaciones y benchmark vs. ensamble de árboles
+
+De una corrida real de `train_deep_energy.py` sobre la misma partición
+cronológica del §7.3 (3.672 train / 648 test), 120 épocas, misma
+arquitectura y semilla por activación:
+
+| Activación | RMSE energía específica | RMSE throughput | R² global |
+|---|---:|---:|---:|
+| ReLU | 0.690 | 103.87 | 0.545 |
+| GELU | 0.638 | 74.01 | 0.724 |
+| **Swish (SiLU)** | **0.635** | **66.01** | **0.758** |
+
+![Comparación de activaciones](outputs/plots/deep_energy_activation_curves.png)
+
+Swish generaliza mejor de las tres, apenas por delante de GELU y
+claramente por delante de ReLU en esta arquitectura — consistente con el
+gradiente suave y no monótono cerca de cero que comparten Swish y GELU,
+que ayuda más a la optimización que el corte duro en cero de ReLU en esta
+profundidad/ancho. Es un resultado empírico específico de este dataset y
+tamaño de red, no una afirmación general de que Swish supere a ReLU en
+todo contexto.
+
+**MLP (Swish) vs. ensamble de árboles (Gradient Boosting, §7.3) — mismo set de test:**
+
+| | Gradient Boosting (árbol) | MLP PyTorch (Swish) |
+|---|---:|---:|
+| RMSE energía específica | **0.600** | 0.635 |
+| RMSE throughput | **56.93** | 66.01 |
+| R² global | **0.803** | 0.758 |
+
+![Deep learning vs. ensamble de árboles](outputs/plots/deep_vs_tree_benchmark.png)
+
+El ensamble de árboles se mantiene como modelo de producción — supera al
+MLP en ambos targets — pero el surrogate neuronal queda a ~4.5 puntos de R²
+usando una familia de funciones completamente distinta y sin feature
+engineering especifico de árboles, lo que valida cruzadamente que el
+desempeño del modelo de árboles refleja una señal genuina y recuperable, no
+un artefacto de una sola familia de algoritmos. Todas las métricas
+comparativas (modelos de árbol + activaciones del MLP) se persisten
+adicionalmente en una tabla DuckDB local
+(`outputs/reports/model_metrics.duckdb`, `model_comparison`) para análisis
+SQL ad-hoc.
 
 ---
 

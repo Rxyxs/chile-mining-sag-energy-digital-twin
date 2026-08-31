@@ -276,6 +276,66 @@ def plot_correlation_heatmap(clean_parquet: Path, out_path: Path):
     plt.close(fig)
 
 
+ACTIVATION_COLORS = {
+    "relu": CAT["orange"],
+    "gelu": CAT["aqua"],
+    "swish": CAT["blue"],
+}
+
+ACTIVATION_LABELS = {
+    "relu": "ReLU",
+    "gelu": "GELU",
+    "swish": "Swish (SiLU)",
+}
+
+
+def plot_activation_loss_curves(loss_curves_csv: Path, out_path: Path):
+    df = pd.read_csv(loss_curves_csv)
+    fig, ax = plt.subplots(figsize=(9, 5.5), facecolor=SURFACE)
+    for activation in ACTIVATION_COLORS:
+        if activation not in df.columns:
+            continue
+        ax.plot(df["epoch"], df[activation], color=ACTIVATION_COLORS[activation], linewidth=2,
+                label=ACTIVATION_LABELS[activation])
+    _style_axes(ax)
+    ax.set_xlabel("Epoca", color=INK_SECONDARY, fontsize=10)
+    ax.set_ylabel("Huber loss ponderado (train)", color=INK_SECONDARY, fontsize=10)
+    ax.set_title("MLP PyTorch — convergencia por funcion de activacion",
+                 color=INK_PRIMARY, fontsize=12, fontweight="bold", loc="left")
+    ax.legend(frameon=True, facecolor=SURFACE, edgecolor=GRID, framealpha=0.92,
+              fontsize=9, labelcolor=INK_SECONDARY)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, facecolor=SURFACE)
+    plt.close(fig)
+
+
+def plot_deep_vs_tree_benchmark(benchmark_json: Path, out_path: Path):
+    with open(benchmark_json) as f:
+        report = json.load(f)
+    targets = ["specific_energy_kwh_t", "throughput_tph"]
+    tree_label = MODEL_LABELS.get(report["tree_model"], report["tree_model"])
+    deep_label = report["deep_model"].replace("pytorch_mlp_", "MLP PyTorch (") + ")"
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 5), facecolor=SURFACE)
+    for ax, target in zip(axes, targets):
+        values = [report["tree_metrics"][target]["rmse"], report["deep_metrics"][target]["rmse"]]
+        colors = [CAT["violet"], CAT["blue"]]
+        bars = ax.bar([tree_label, deep_label], values, color=colors, zorder=3)
+        for bar, val in zip(bars, values):
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 1.01, f"{val:.2f}",
+                     ha="center", fontsize=9, color=INK_SECONDARY)
+        ax.tick_params(axis="x", labelrotation=15)
+        _style_axes(ax)
+        ax.set_ylabel("RMSE (test holdout)", color=INK_SECONDARY, fontsize=9)
+        ax.set_title(TARGET_LABELS[target], color=INK_PRIMARY, fontsize=11, fontweight="bold", loc="left")
+
+    fig.suptitle("Benchmark: arbol ganador vs. red neuronal (surrogate model)", color=INK_PRIMARY,
+                 fontsize=13, fontweight="bold", x=0.02, ha="left")
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
+    fig.savefig(out_path, dpi=150, facecolor=SURFACE)
+    plt.close(fig)
+
+
 def generate_all_plots(base_dir: Path):
     data_dir = base_dir / "data"
     reports_dir = base_dir / "outputs" / "reports"
@@ -294,6 +354,15 @@ def generate_all_plots(base_dir: Path):
                                plots_dir / "operational_overview.png")
     plot_correlation_heatmap(data_dir / "processed" / "sag_mill_operation_with_kf.parquet",
                               plots_dir / "correlation_heatmap.png")
+
+    loss_curves_csv = reports_dir / "deep_energy_loss_curves.csv"
+    if loss_curves_csv.exists():
+        plot_activation_loss_curves(loss_curves_csv, plots_dir / "deep_energy_activation_curves.png")
+
+    deep_vs_tree_json = reports_dir / "deep_vs_tree_benchmark.json"
+    if deep_vs_tree_json.exists():
+        plot_deep_vs_tree_benchmark(deep_vs_tree_json, plots_dir / "deep_vs_tree_benchmark.png")
+
     print(f"Graficos guardados en {plots_dir}")
 
 
