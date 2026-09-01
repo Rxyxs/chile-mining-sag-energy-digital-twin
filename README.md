@@ -442,6 +442,9 @@ holdout of 648 records = 15%).
 | **Kalman estimate (proxy + lab fusion)** | **0.545 kWh/t** |
 | **Error reduction** | **79.0%** |
 
+The animation below reveals the fusion progressively, hour by hour, with a live-value tag on the Kalman estimate.
+
+![Kalman Filter animated](outputs/plots/kalman_filter_trace_animated.gif)
 ![Kalman Filter](outputs/plots/kalman_filter_trace.png)
 
 ## 7.2 Exploratory analysis — correlations
@@ -526,8 +529,12 @@ classical statistical baseline — recent history (lags) captures
 hardness-regime transitions that a purely seasonal model cannot
 anticipate.
 
+The animated version races all three series across the 24h horizon with live value tags at each tip.
+
+![Forecasting comparison animated](outputs/plots/forecast_comparison_animated.gif)
 ![Forecasting comparison](outputs/plots/forecast_comparison.png)
 
+![Full operational series animated](outputs/plots/operational_overview_animated.gif)
 ![Full operational series](outputs/plots/operational_overview.png)
 
 ## 7.7 Survival analysis (CoxPH) — mechanical time-to-failure

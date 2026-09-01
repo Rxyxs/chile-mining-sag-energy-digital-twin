@@ -451,6 +451,9 @@ holdout cronológico de 648 registros = 15%).
 | **Estimación Kalman (fusión proxy + laboratorio)** | **0.545 kWh/t** |
 | **Reducción de error** | **79.0%** |
 
+La animación revela la fusión de forma progresiva, hora a hora, con una etiqueta de valor en vivo sobre la estimación Kalman.
+
+![Filtro de Kalman animado](outputs/plots/kalman_filter_trace_animated.gif)
 ![Filtro de Kalman](outputs/plots/kalman_filter_trace.png)
 
 ## 7.2 Análisis exploratorio — correlaciones
@@ -536,8 +539,12 @@ baseline estadístico clásico — el historial reciente (lags) capta
 transiciones de régimen de dureza que un modelo puramente estacional no
 puede anticipar.
 
+La versión animada corre las tres series a lo largo del horizonte de 24h con etiquetas de valor en vivo en cada punta.
+
+![Comparación de forecasting animada](outputs/plots/forecast_comparison_animated.gif)
 ![Comparación de forecasting](outputs/plots/forecast_comparison.png)
 
+![Serie operacional completa animada](outputs/plots/operational_overview_animated.gif)
 ![Serie operacional completa](outputs/plots/operational_overview.png)
 
 ## 7.7 Análisis de supervivencia (CoxPH) — tiempo hasta falla mecánica
