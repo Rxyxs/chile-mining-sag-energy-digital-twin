@@ -1,4 +1,4 @@
-[ 🇺🇸 English ] | [ 🇨🇱 Leer en Español ](README.es.md)
+[ English ] | [ Leer en Español ](README.es.md)
 
 # 1. Project Title
 
