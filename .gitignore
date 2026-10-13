@@ -27,3 +27,6 @@ outputs/reports/*.duckdb
 .vscode/
 .idea/
 .DS_Store
+
+# PDF oficiales (CNE, Cochilco): se descargan con src/data/real_sources.py / Official PDFs, downloaded on demand
+data/raw/real/

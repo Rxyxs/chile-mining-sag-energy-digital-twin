@@ -16,8 +16,8 @@
 ![SHAP](https://img.shields.io/badge/SHAP-explicabilidad-FF4B4B?style=flat)
 ![FastAPI](https://img.shields.io/badge/FastAPI-servicio-009688?style=flat&logo=fastapi&logoColor=white)
 ![Matplotlib](https://img.shields.io/badge/Matplotlib-3.8%2B-11557C?style=flat)
-![Pytest](https://img.shields.io/badge/tests-40%20passing-brightgreen?style=flat&logo=pytest&logoColor=white)
-![Status](https://img.shields.io/badge/status-research%20%2F%20synthetic%20data-lightgrey?style=flat)
+![Pytest](https://img.shields.io/badge/tests-56%20passing-brightgreen?style=flat&logo=pytest&logoColor=white)
+![Status](https://img.shields.io/badge/data-simulated%20plant%20%2B%20real%20CNE%20prices-lightgrey?style=flat)
 
 Un gemelo digital que fusiona sensores ruidosos de dureza de mineral con un
 **Filtro de Kalman**, predice **energía específica y throughput de un
@@ -56,20 +56,20 @@ ruidosos (potencia, vibración) más un ensayo de laboratorio que llega horas
 después. El resultado típico es un molino que opera reactivamente respecto
 a su propia capacidad instalada, en vez de anticiparse.
 
-**Impacto económico ilustrativo** (calculado con los propios números que
-este proyecto produce al ejecutarse, no una cifra de folleto): la
-simulación de referencia de este repositorio arroja una potencia promedio
-de **25.3 MW** sobre un molino de 28 MW instalados. A un costo industrial
-de referencia de ~USD 70/MWh (rango típico citado para contratos de
-suministro a gran minería en Chile), eso implica un gasto energético anual
-del orden de **USD 15.5 millones para una sola línea SAG**. Una mejora de
-apenas **1% en eficiencia energética específica** —el tipo de ganancia que
-un soft-sensor y un modelo de setpoint predictivo pueden capturar—
-equivaldría a unos **USD 155.000/año por línea**; una operación grande con
-varias líneas SAG multiplica esa cifra en consecuencia. Esta cuenta es
-deliberadamente ilustrativa (no es el ROI de ninguna faena específica); el
-punto es que en conminución, fracciones de punto porcentual de eficiencia
-energética son dinero real, no un decimal cosmético.
+**Impacto económico ilustrativo, valorizado con datos reales.** La simulación de referencia de
+este repositorio arroja una potencia promedio de **25,3 MW** sobre un molino SAG de 28 MW
+instalados, unos **221 GWh al año**. Esa energía se valoriza al **costo marginal
+real de la barra Crucero 220 kV**, el nodo de referencia del norte minero, tomado de 95 reportes
+mensuales de la Comisión Nacional de Energía (2018-02 a 2026-08; sección 7.10). El precio promedió
+**USD 63,8/MWh** (mediana 55,1), pero osciló entre 29,2 y 189,5, así que el
+gasto energético anual del mismo molino va de **USD 8,9 millones** (precio P10) a **USD 21,5
+millones** (P90), con **USD 12,2 millones** a la mediana. Una **mejora de 1% en eficiencia energética
+específica** vale entre **USD 89 y 215 mil al año por línea**. Antes el proyecto
+suponía un precio fijo de USD 70/MWh (USD 15,5 millones y USD 155.000/año); con precios reales, la mediana
+queda 21% bajo ese supuesto, y el valor de la eficiencia se duplica con creces entre
+un año barato y uno caro. El costo marginal es el precio spot del sistema: las mineras grandes compran casi
+toda su energía con contratos de largo plazo, así que esto mide el costo de oportunidad de la energía
+ahorrada, no la tarifa de una faena, y la planta sigue siendo simulada.
 
 ## 2.1 Impacto de Negocio e Indicadores Clave (KPIs)
 
@@ -77,7 +77,7 @@ energética son dinero real, no un decimal cosmético.
 |---|---|---|
 | Mejor modelo multi-output (energía específica + throughput) | Gradient Boosting, R² 0,803 promedio | Le ganó incluso a LightGBM afinado con hiperparámetros -- un resultado empírico, no asumido de antemano |
 | Pronóstico de demanda energética a 24h | LightGBM RMSE 2,767 MW vs. Holt-Winters 3,822 MW | **27,6%** de reducción en RMSE, **33,5%** en MAPE -- los lags capturan transiciones de régimen de dureza que un modelo solo-estacional no puede |
-| Valor anual ilustrativo de una mejora de 1% en eficiencia | ~USD 155.000/año por línea SAG | Sobre un gasto energético estimado de ~USD 15,5M/año para una sola línea -- fracciones de porcentaje son dinero real en conminución |
+| Valor anual de una mejora de 1% en eficiencia, a precios reales | USD 89-215 mil/año por línea SAG (USD 122 mil a la mediana) | Valorizado con 95 meses de costo marginal real en Crucero 220 kV (CNE); el supuesto fijo de USD 70/MWh exageraba la mediana en 27% |
 | Bug real de calibración detectado y corregido | Parámetro P80 mal calibrado (57% de valores en el clip) → corregido | Rastreado vía un artefacto diagonal en el gráfico de residuos; split de R² balanceado 0,58/0,94 → 0,80/0,81 tras la corrección |
 
 ---
@@ -648,6 +648,52 @@ SQL ad-hoc.
 
 ---
 
+## 7.10 Anclaje con datos reales: precio de la energía (CNE) y consumo de las concentradoras (Cochilco)
+
+No existe un conjunto público de datos SCADA de un molino SAG real: las búsquedas en Kaggle, Zenodo y
+Mendeley, y los papers que usan datos de planta (Copper Mountain, una mina de oro australiana, un estudio
+chileno de 2026), no los liberan. Por eso la planta sigue siendo simulada, pero las dos magnitudes que
+definen el problema económico vienen de fuentes oficiales chilenas, extraídas por
+[`src/data/real_sources.py`](src/data/real_sources.py) y versionadas en [`data/real/`](data/real/).
+
+**Precio de la energía.** La Comisión Nacional de Energía publica un reporte mensual en PDF; cada uno
+informa el costo marginal promedio del mes anterior en la barra Crucero 220 kV. El extractor lee tres
+formatos: una frase, una tabla (valor más variación mensual y anual) y reportes cuyo texto es una imagen,
+leídos con OCR (RapidOCR). Las variaciones permiten reconstruir meses cuyo propio reporte falta.
+
+- **95 meses, de 2018-02 a 2026-08**: 72 publicados en su propio reporte
+  (53 de tablas, 8 de texto, 11 por OCR) y 23
+  reconstruidos desde las variaciones porcentuales de otro reporte.
+- **Validación cruzada de la extracción.** En 98 casos un mes aparece publicado y a la vez implícito
+  en otro reporte; coinciden con una diferencia mediana de 0,0%, un P95 de
+  0,3% y un máximo de 1,8%. Los 15 pares con
+  OCR difieren a lo más en 0,18%.
+- **La fuente tiene errores, y se detectan.** Dos reportes repiten palabra por palabra la frase del mes
+  anterior y solo cambian el nombre del mes (RMensual_v201910.pdf, RMensual_v202401.pdf). El extractor marca cualquier
+  reporte cuyo valor y variación sean iguales a los del mes previo y descarta todo lo que se derive de él.
+  Un test reproduce el caso.
+
+![Precio real de la energía](outputs/plots/real_energy_price.png)
+
+El pico de junio de 2022 (USD 189,5/MWh) lo confirman dos reportes independientes: el de julio lo
+publica y el de agosto lo implica desde su propia variación mensual. Promedios anuales:
+2018 53,2, 2019 45,5, 2020 39,6, 2021 72,4, 2022 102,1, 2023 80,0, 2024 59,5, 2025 67,5, 2026 58,7 USD/MWh.
+
+**Consumo de las concentradoras.** El informe de energía 2024 de Cochilco publica la electricidad por
+tonelada procesada en las concentradoras de cobre de Chile solo como gráfico. Como el gráfico es vectorial,
+los 15 puntos anuales (2010-2024) se leen desde las coordenadas del PDF y se calibran con las líneas de
+grilla del eje (70 y 85 MJ/t): entre 20,2 y 23,0 kWh/t,
+21,2 en 2024.
+
+![Verificación contra las concentradoras](outputs/plots/concentrator_check.png)
+
+El circuito de molienda simulado usa **10,8 kWh/t** en promedio (P10-P90
+8,5-13,1), el **51% de la
+electricidad de una concentradora real**. El resto de la concentradora (chancado, flotación, remolienda,
+espesamiento, bombeo) tiene que caber en la otra mitad, así que la escala del simulador es plausible. Es una
+verificación de consistencia, no una calibración: el simulador no se ajustó para acertarle, y un promedio
+nacional no dice nada del mineral de una planta específica.
+
 # 8. Conclusión
 
 - **El Filtro de Kalman funciona y se demuestra que importa**: reduce el
@@ -693,8 +739,8 @@ SQL ad-hoc.
   explicación SHAP junto a cada predicción servida, no solo el número, para
   que los operadores puedan auditar *por qué* el modelo recomienda lo que
   recomienda.
-- **Limitación central, y la más importante de nombrar**: los datos son
-  sintéticos, generados por este mismo repositorio a partir de la Ley de
+- **Limitación central, y la más importante de nombrar**: los datos de planta son sintéticos
+  (el precio de la energía y el consumo de las concentradoras son reales, sección 7.10), generados por este mismo repositorio a partir de la Ley de
   Bond más ruido operacional — no telemetría SCADA propietaria de ninguna
   faena, y el dataset de supervivencia es sintético sobre sintético
   (tiempos de falla simulados sobre una historia operacional simulada).

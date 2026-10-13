@@ -336,6 +336,61 @@ def plot_deep_vs_tree_benchmark(benchmark_json: Path, out_path: Path):
     plt.close(fig)
 
 
+SOURCE_LABELS = {"texto": "Publicado (texto)", "tabla": "Publicado (tabla)", "ocr": "Publicado (OCR)",
+                 "derivado_mensual": "Reconstruido desde variacion mensual",
+                 "derivado_anual": "Reconstruido desde variacion anual"}
+
+
+def plot_real_energy_price(cmg_csv: Path, economics_json: Path, out_path: Path):
+    """Costo marginal mensual real en Crucero 220 kV frente al precio que suponia el proyecto."""
+    cmg = pd.read_csv(cmg_csv)
+    econ = json.loads(Path(economics_json).read_text(encoding="utf-8"))
+    x = pd.PeriodIndex(cmg["month"], freq="M").to_timestamp()
+    fig, ax = plt.subplots(figsize=(10, 4.6), facecolor=SURFACE)
+    _style_axes(ax)
+    # Los meses sin reporte quedan como hueco en la linea, no se interpolan visualmente.
+    full = cmg.set_index(pd.PeriodIndex(cmg["month"], freq="M"))["cmg_usd_mwh"]
+    full = full.reindex(pd.period_range(full.index.min(), full.index.max(), freq="M"))
+    ax.plot(full.index.to_timestamp(), full.to_numpy(), color=CAT["blue"], linewidth=1.8, zorder=2,
+            label="Costo marginal real, Crucero 220 kV (huecos: meses sin reporte)")
+    derived = cmg["source"].str.startswith("derivado")
+    ax.scatter(x[~derived], cmg.loc[~derived, "cmg_usd_mwh"], color=CAT["blue"], s=14, zorder=3,
+               label="Mes publicado en su reporte")
+    ax.scatter(x[derived], cmg.loc[derived, "cmg_usd_mwh"], facecolor=SURFACE, edgecolor=CAT["blue"], s=18,
+               zorder=3, label="Mes reconstruido desde variaciones")
+    assumed = econ["annual_cost_usd"]["supuesto_anterior"] / econ["annual_energy_mwh"]
+    ax.axhline(assumed, color=INK_PRIMARY, linewidth=1.2, linestyle="--", zorder=1)
+    ax.text(x.min(), assumed + 2, f"Precio supuesto antes: {assumed:.0f} USD/MWh", fontsize=9, color=INK_PRIMARY)
+    ax.set_ylabel("USD/MWh", color=INK_SECONDARY, fontsize=9)
+    ax.set_title("Precio real de la energia en el norte minero (CNE, promedio mensual)", loc="left",
+                 color=INK_PRIMARY, fontsize=12, pad=12)
+    ax.legend(frameon=False, fontsize=8.5, loc="upper left", bbox_to_anchor=(0, -0.1), ncol=3, labelcolor=INK_SECONDARY)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, facecolor=SURFACE, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_concentrator_check(cochilco_csv: Path, economics_json: Path, out_path: Path):
+    """Consumo electrico real de las concentradoras chilenas frente a la molienda simulada."""
+    coc = pd.read_csv(cochilco_csv)
+    chk = json.loads(Path(economics_json).read_text(encoding="utf-8"))["simulator_check"]
+    fig, ax = plt.subplots(figsize=(10, 4.6), facecolor=SURFACE)
+    _style_axes(ax)
+    ax.plot(coc["year"], coc["kwh_per_t"], color=CAT["blue"], linewidth=2.0, marker="o", markersize=4,
+            label="Concentradoras de cobre, Chile (Cochilco)")
+    lo, hi = chk["sim_grinding_p10_p90"]
+    ax.axhspan(lo, hi, color=CAT["orange"], alpha=0.15, lw=0, label="Molienda simulada, P10-P90")
+    ax.axhline(chk["sim_grinding_kwh_t"], color=CAT["orange"], linewidth=1.6, label="Molienda simulada, promedio")
+    ax.set_ylim(0, max(coc["kwh_per_t"].max(), hi) * 1.15)
+    ax.set_ylabel("kWh por tonelada procesada", color=INK_SECONDARY, fontsize=9)
+    ax.set_title(f"La molienda simulada equivale al {chk['implied_grinding_share'] * 100:.0f}% del consumo "
+                 f"real de una concentradora ({chk['cochilco_year']})", loc="left", color=INK_PRIMARY, fontsize=12, pad=12)
+    ax.legend(frameon=False, fontsize=8.5, loc="upper left", bbox_to_anchor=(0, -0.1), ncol=3, labelcolor=INK_SECONDARY)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, facecolor=SURFACE, bbox_inches="tight")
+    plt.close(fig)
+
+
 def generate_all_plots(base_dir: Path):
     data_dir = base_dir / "data"
     reports_dir = base_dir / "outputs" / "reports"
@@ -362,6 +417,13 @@ def generate_all_plots(base_dir: Path):
     deep_vs_tree_json = reports_dir / "deep_vs_tree_benchmark.json"
     if deep_vs_tree_json.exists():
         plot_deep_vs_tree_benchmark(deep_vs_tree_json, plots_dir / "deep_vs_tree_benchmark.png")
+
+    economics_json = reports_dir / "energy_economics.json"
+    if economics_json.exists():
+        plot_real_energy_price(data_dir / "real" / "cne_crucero_cmg_monthly.csv", economics_json,
+                               plots_dir / "real_energy_price.png")
+        plot_concentrator_check(data_dir / "real" / "cochilco_concentradora_mj_t.csv", economics_json,
+                                plots_dir / "concentrator_check.png")
 
     print(f"Graficos guardados en {plots_dir}")
 
