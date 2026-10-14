@@ -14,10 +14,26 @@ Loss custom: Huber (SmoothL1) ponderado por target, normalizado por el
 desvio estandar de cada objetivo en train -- sin esto, throughput (t/h,
 escala ~100) domina el gradiente sobre energia especifica (kWh/t, escala
 ~15) y el modelo ignora el segundo objetivo.
+
+Entrenamiento: el tramo final del train (cronologico) se separa como
+validacion. Cada red entrena al menos ``MIN_EPOCHS`` epocas y como maximo
+``MAX_EPOCHS``; despues del minimo, early stopping corta si la loss de
+validacion no mejora en ``PATIENCE`` epocas y se restauran los pesos de la
+mejor epoca. La tasa de aprendizaje baja a la mitad cuando la validacion se
+estanca. La activacion ganadora se elige en validacion: el test se mira una
+sola vez, al final.
+
+Checkpoints: cada epoca se guarda el estado completo (pesos, optimizador,
+scheduler, historia, mejor modelo) en ``outputs/models/checkpoints/``. Si el
+proceso se interrumpe, la siguiente corrida retoma desde la ultima epoca;
+el checkpoint lleva una huella de los datos y la configuracion, asi que un
+checkpoint de otro dataset no se reutiliza.
 """
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
 from pathlib import Path
 
@@ -35,9 +51,14 @@ from src.models.train_multioutput import FEATURE_COLS, TARGET_COLS, chronologica
 RANDOM_STATE = 42
 HIDDEN_DIMS = (64, 32)
 ACTIVATIONS = ("relu", "gelu", "swish")
-N_EPOCHS = 120
+MIN_EPOCHS = 100
+MAX_EPOCHS = 400
+PATIENCE = 25
+VAL_FRACTION = 0.15
 BATCH_SIZE = 64
 LEARNING_RATE = 1e-3
+LR_FACTOR = 0.5
+LR_PATIENCE = 10
 HUBER_DELTA = 1.0
 
 
@@ -86,31 +107,104 @@ def _to_tensor(x: np.ndarray) -> torch.Tensor:
     return torch.as_tensor(x, dtype=torch.float32)
 
 
+def _fingerprint(*arrays: np.ndarray, **config) -> str:
+    """Huella de los datos y la configuracion: un checkpoint solo se retoma si coincide."""
+    h = hashlib.sha256()
+    for a in arrays:
+        if a is not None:
+            h.update(np.ascontiguousarray(a, dtype=np.float32).tobytes())
+    h.update(json.dumps(config, sort_keys=True, default=str).encode())
+    return h.hexdigest()[:16]
+
+
 def train_mlp(X_train: np.ndarray, y_train: np.ndarray, activation: str,
-              n_epochs: int = N_EPOCHS, batch_size: int = BATCH_SIZE,
-              lr: float = LEARNING_RATE, seed: int = RANDOM_STATE) -> tuple[EnergyThroughputMLP, list[float]]:
+              X_val: np.ndarray | None = None, y_val: np.ndarray | None = None,
+              n_epochs: int = MAX_EPOCHS, min_epochs: int = MIN_EPOCHS, patience: int = PATIENCE,
+              batch_size: int = BATCH_SIZE, lr: float = LEARNING_RATE, seed: int = RANDOM_STATE,
+              checkpoint_path: Path | None = None) -> tuple[EnergyThroughputMLP, dict]:
+    """Entrena el MLP y devuelve (modelo, historia).
+
+    Con datos de validacion: early stopping sobre la loss de validacion, que solo puede cortar despues de
+    ``min_epochs``, y restauracion de los pesos de la mejor epoca. Sin validacion entrena ``n_epochs``
+    completas. ``historia`` = {"train": [...], "val": [...], "best_epoch": int, "epochs_run": int,
+    "stopped_early": bool, "resumed_from": int}.
+    """
     torch.manual_seed(seed)
     model = EnergyThroughputMLP(n_features=X_train.shape[1], n_targets=y_train.shape[1], activation=activation)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    has_val = X_val is not None and y_val is not None
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=LR_FACTOR, patience=LR_PATIENCE) \
+        if has_val else None
 
     target_std = _to_tensor(y_train.std(axis=0)).clamp_min(1e-6)
     dataset = TensorDataset(_to_tensor(X_train), _to_tensor(y_train))
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, generator=torch.Generator().manual_seed(seed))
+    generator = torch.Generator()
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, generator=generator)
+    Xv, yv = (_to_tensor(X_val), _to_tensor(y_val)) if has_val else (None, None)
 
-    history = []
-    model.train()
-    for _ in range(n_epochs):
-        epoch_loss = 0.0
-        n_batches = 0
+    fp = _fingerprint(X_train, y_train, X_val, y_val, activation=activation, n_epochs=n_epochs,
+                      min_epochs=min_epochs, patience=patience, batch_size=batch_size, lr=lr, seed=seed,
+                      hidden=HIDDEN_DIMS)
+    state = {"epoch": 0, "train": [], "val": [], "best_val": float("inf"), "best_epoch": 0,
+             "best_state": None, "bad_epochs": 0, "done": False}
+    resumed_from = 0
+    if checkpoint_path is not None and Path(checkpoint_path).exists():
+        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        if ckpt.get("fingerprint") == fp:
+            model.load_state_dict(ckpt["model"])
+            optimizer.load_state_dict(ckpt["optimizer"])
+            if scheduler is not None and ckpt.get("scheduler") is not None:
+                scheduler.load_state_dict(ckpt["scheduler"])
+            state = ckpt["state"]
+            resumed_from = state["epoch"]
+
+    def save_checkpoint():
+        if checkpoint_path is None:
+            return
+        Path(checkpoint_path).parent.mkdir(parents=True, exist_ok=True)
+        tmp = Path(checkpoint_path).with_suffix(".tmp")
+        torch.save({"fingerprint": fp, "model": model.state_dict(), "optimizer": optimizer.state_dict(),
+                    "scheduler": scheduler.state_dict() if scheduler is not None else None, "state": state}, tmp)
+        tmp.replace(checkpoint_path)  # escritura atomica: un corte no deja un checkpoint a medias
+
+    while not state["done"] and state["epoch"] < n_epochs:
+        epoch = state["epoch"]
+        generator.manual_seed(seed + epoch)  # orden de batches reproducible tambien al retomar
+        model.train()
+        epoch_loss, n_batches = 0.0, 0
         for xb, yb in loader:
             optimizer.zero_grad()
-            pred = model(xb)
-            loss = weighted_huber_loss(pred, yb, target_std)
+            loss = weighted_huber_loss(model(xb), yb, target_std)
             loss.backward()
             optimizer.step()
             epoch_loss += float(loss.item())
             n_batches += 1
-        history.append(epoch_loss / max(n_batches, 1))
+        state["train"].append(epoch_loss / max(n_batches, 1))
+        state["epoch"] = epoch + 1
+
+        if has_val:
+            model.eval()
+            with torch.no_grad():
+                val_loss = float(weighted_huber_loss(model(Xv), yv, target_std).item())
+            state["val"].append(val_loss)
+            scheduler.step(val_loss)
+            if val_loss < state["best_val"] - 1e-6:
+                state.update(best_val=val_loss, best_epoch=state["epoch"], bad_epochs=0,
+                             best_state=copy.deepcopy(model.state_dict()))
+            else:
+                state["bad_epochs"] += 1
+            if state["epoch"] >= min_epochs and state["bad_epochs"] >= patience:
+                state["done"] = True
+        save_checkpoint()
+
+    if has_val and state["best_state"] is not None:
+        model.load_state_dict(state["best_state"])
+    stopped_early = has_val and state["epoch"] < n_epochs
+    state["done"] = True
+    save_checkpoint()
+    history = {"train": state["train"], "val": state["val"],
+               "best_epoch": state["best_epoch"] if has_val else state["epoch"],
+               "epochs_run": state["epoch"], "stopped_early": bool(stopped_early), "resumed_from": resumed_from}
     return model, history
 
 
@@ -131,36 +225,41 @@ def evaluate_mlp(model: EnergyThroughputMLP, X_test: np.ndarray, y_test: np.ndar
     return metrics, preds
 
 
-def run_activation_comparison(df: pd.DataFrame, out_dir: Path,
-                               n_epochs: int = N_EPOCHS) -> dict:
+def run_activation_comparison(df: pd.DataFrame, out_dir: Path, n_epochs: int = MAX_EPOCHS,
+                               min_epochs: int = MIN_EPOCHS, patience: int = PATIENCE) -> dict:
     """Entrena un MLP identico (misma arquitectura, mismo loss, misma
-    semilla) para cada activacion y compara metricas de test, para aislar
-    el efecto de la funcion de activacion del resto del pipeline."""
+    semilla) para cada activacion, elige la mejor en validacion y reporta
+    test una sola vez, para aislar el efecto de la funcion de activacion."""
     out_dir.mkdir(parents=True, exist_ok=True)
     reports_dir = out_dir.parent / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
+    ckpt_dir = out_dir / "checkpoints"
 
     train_df, test_df = chronological_split(df)
-    X_train_raw = train_df[FEATURE_COLS].to_numpy(dtype=np.float64)
-    X_test_raw = test_df[FEATURE_COLS].to_numpy(dtype=np.float64)
-    y_train = train_df[TARGET_COLS].to_numpy(dtype=np.float64)
-    y_test = test_df[TARGET_COLS].to_numpy(dtype=np.float64)
+    n_val = max(1, int(len(train_df) * VAL_FRACTION))
+    fit_df, val_df = train_df.iloc[:-n_val], train_df.iloc[-n_val:]
 
+    def xy(frame):
+        return frame[FEATURE_COLS].to_numpy(dtype=np.float64), frame[TARGET_COLS].to_numpy(dtype=np.float64)
+
+    (X_fit_raw, y_fit), (X_val_raw, y_val), (X_test_raw, y_test) = xy(fit_df), xy(val_df), xy(test_df)
     scaler = StandardScaler()
-    X_train = scaler.fit_transform(X_train_raw)
+    X_fit = scaler.fit_transform(X_fit_raw)
+    X_val = scaler.transform(X_val_raw)
     X_test = scaler.transform(X_test_raw)
 
-    results = {}
-    histories = {}
-    fitted = {}
+    results, val_results, histories, fitted = {}, {}, {}, {}
     for activation in ACTIVATIONS:
-        model, history = train_mlp(X_train, y_train, activation, n_epochs=n_epochs)
-        metrics, _ = evaluate_mlp(model, X_test, y_test)
-        results[activation] = metrics
+        model, history = train_mlp(X_fit, y_fit, activation, X_val=X_val, y_val=y_val, n_epochs=n_epochs,
+                                   min_epochs=min_epochs, patience=patience,
+                                   checkpoint_path=ckpt_dir / f"deep_energy_{activation}.ckpt")
+        val_results[activation], _ = evaluate_mlp(model, X_val, y_val)
         histories[activation] = history
         fitted[activation] = model
 
-    best_activation = max(results, key=lambda k: results[k]["overall_r2_uniform_average"])
+    best_activation = max(val_results, key=lambda k: val_results[k]["overall_r2_uniform_average"])
+    for activation in ACTIVATIONS:  # test: una sola evaluacion por modelo ya elegido
+        results[activation], _ = evaluate_mlp(fitted[activation], X_test, y_test)
     best_model = fitted[best_activation]
 
     torch.save(best_model.state_dict(), out_dir / "deep_energy_mlp.pt")
@@ -174,16 +273,29 @@ def run_activation_comparison(df: pd.DataFrame, out_dir: Path,
         residuals_df[f"{target}_residual"] = residuals_df[target] - best_preds[:, i]
     residuals_df.to_csv(reports_dir / "deep_energy_test_residuals.csv", index=False)
 
-    loss_curve_df = pd.DataFrame({activation: histories[activation] for activation in ACTIVATIONS})
-    loss_curve_df.insert(0, "epoch", range(1, n_epochs + 1))
-    loss_curve_df.to_csv(reports_dir / "deep_energy_loss_curves.csv", index=False)
+    # Curvas: una columna de validacion por activacion (nombre = activacion) y otra de train; las
+    # activaciones paran en epocas distintas, asi que las columnas mas cortas quedan con NaN al final.
+    longest = max(h["epochs_run"] for h in histories.values())
+    curves = {"epoch": range(1, longest + 1)}
+    for activation, h in histories.items():
+        pad = [np.nan] * (longest - h["epochs_run"])
+        curves[activation] = h["val"] + pad
+        curves[f"{activation}_train"] = h["train"] + pad
+    pd.DataFrame(curves).to_csv(reports_dir / "deep_energy_loss_curves.csv", index=False)
 
     report = {
         "best_activation": best_activation,
-        "n_train": len(train_df),
+        "selected_on": "validation",
+        "n_train": len(fit_df),
+        "n_val": len(val_df),
         "n_test": len(test_df),
-        "n_epochs": n_epochs,
+        "max_epochs": n_epochs,
+        "min_epochs": min_epochs,
+        "patience": patience,
+        "training": {a: {k: histories[a][k] for k in ("epochs_run", "best_epoch", "stopped_early", "resumed_from")}
+                     | {"best_val_loss": float(min(histories[a]["val"]))} for a in ACTIVATIONS},
         "loss": "weighted_huber (per-target std normalized)",
+        "val_metrics": val_results,
         "metrics": results,
     }
     with open(reports_dir / "deep_learning_activation_comparison.json", "w") as f:

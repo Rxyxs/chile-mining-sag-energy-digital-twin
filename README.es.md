@@ -605,15 +605,25 @@ restricciones explícitas — más que este resultado numérico puntual.
 
 ## 7.9 Surrogate MLP en PyTorch — comparación de activaciones y benchmark vs. ensamble de árboles
 
-De una corrida real de `train_deep_energy.py` sobre la misma partición
-cronológica del §7.3 (3.672 train / 648 test), 120 épocas, misma
-arquitectura y semilla por activación:
+De una corrida real de `train_deep_energy.py` sobre la misma partición cronológica del §7.3. El
+último 15% del periodo de entrenamiento se reserva como validación (3.122 train /
+550 validación / 648 test). Cada red entrena **al menos 100 épocas** (máximo 400);
+desde ahí, early stopping corta cuando la loss de validación no mejora en 25 épocas y se
+restauran los pesos de la mejor época. La tasa de aprendizaje baja a la mitad cuando la validación
+se estanca. El estado completo se guarda en un checkpoint cada época, así que una corrida
+interrumpida retoma donde quedó. La activación se elige en validación; el test se mira una sola vez,
+al final.
 
-| Activación | RMSE energía específica | RMSE throughput | R² global |
-|---|---:|---:|---:|
-| ReLU | 0.690 | 103.87 | 0.545 |
-| GELU | 0.638 | 74.01 | 0.724 |
-| **Swish (SiLU)** | **0.635** | **66.01** | **0.758** |
+| Activación | Épocas corridas (mejor) | R² validación | RMSE energía específica | RMSE throughput | R² global (test) |
+|---|---:|---:|---:|---:|---:|
+| ReLU | 138 (113) | 0,470 | 0,655 | 106,86 | 0,539 |
+| GELU | 189 (164) | 0,634 | 0,648 | 74,96 | 0,716 |
+| **Swish (SiLU)** | **268 (243)** | **0,682** | **0,609** | **67,81** | **0,760** |
+
+Frente a la corrida anterior de 120 épocas fijas (elegida en test), el R² global de test casi no se mueve
+(0,758 -> 0,760): mejora energía específica (RMSE 0,635 -> 0,609) y empeora levemente
+throughput (66,01 -> 67,81), con 15% menos datos para ajustar. Entrenar más no destrabó una red
+mejor; dejó la comparación limpia, porque el ganador ya no se elige mirando el test.
 
 ![Comparación de activaciones](outputs/plots/deep_energy_activation_curves.png)
 
@@ -629,9 +639,9 @@ todo contexto.
 
 | | Gradient Boosting (árbol) | MLP PyTorch (Swish) |
 |---|---:|---:|
-| RMSE energía específica | **0.600** | 0.635 |
-| RMSE throughput | **56.93** | 66.01 |
-| R² global | **0.803** | 0.758 |
+| RMSE energía específica | **0.600** | 0.609 |
+| RMSE throughput | **56.93** | 67.81 |
+| R² global | **0.803** | 0.760 |
 
 ![Deep learning vs. ensamble de árboles](outputs/plots/deep_vs_tree_benchmark.png)
 

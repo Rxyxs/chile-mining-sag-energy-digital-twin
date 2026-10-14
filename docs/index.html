@@ -90,7 +90,7 @@
 <h2>7.9 PyTorch MLP surrogate — activation comparison and benchmark vs. tree ensemble</h2>
 <figure>
 <img src="figures/deep_energy_activation_curves.png" alt="Activation comparison" loading="lazy">
-<figcaption>Swish generalizes best (R² 0.78 specific energy, 0.74 throughput), ahead of GELU (0.78, 0.67) and clearly ahead of ReLU (0.74, 0.35).</figcaption>
+<figcaption>Each network trains at least 100 epochs with early stopping and per-epoch checkpoints; Swish wins on validation (R² 0.68) and stops at epoch 268 (best 243). On test: Swish R² 0.80 specific energy, 0.72 throughput; GELU (0.77, 0.66); ReLU (0.76, 0.31).</figcaption>
 </figure>
 <figure>
 <img src="figures/deep_vs_tree_benchmark.png" alt="Deep learning vs. tree ensemble" loading="lazy">

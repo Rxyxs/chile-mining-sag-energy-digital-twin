@@ -295,11 +295,23 @@ def plot_activation_loss_curves(loss_curves_csv: Path, out_path: Path):
     for activation in ACTIVATION_COLORS:
         if activation not in df.columns:
             continue
-        ax.plot(df["epoch"], df[activation], color=ACTIVATION_COLORS[activation], linewidth=2,
-                label=ACTIVATION_LABELS[activation])
+        color = ACTIVATION_COLORS[activation]
+        ax.plot(df["epoch"], df[activation], color=color, linewidth=2,
+                label=f"{ACTIVATION_LABELS[activation]} (validacion)")
+        if f"{activation}_train" in df.columns:
+            ax.plot(df["epoch"], df[f"{activation}_train"], color=color, linewidth=1, linestyle="--", alpha=0.6)
+        val = df[activation]
+        if val.notna().any():
+            best = val.idxmin()
+            ax.scatter(df["epoch"][best], val[best], color=color, s=40, zorder=3, edgecolor="white")
+    if "relu_train" in df.columns:
+        ax.axvline(100, color=INK_SECONDARY, linewidth=0.8, linestyle=":", alpha=0.7)
+        ax.text(101, 0.97, "minimo 100 epocas", fontsize=8, color=INK_SECONDARY, va="top",
+                transform=ax.get_xaxis_transform())
+        ax.set_yscale("log")
     _style_axes(ax)
-    ax.set_xlabel("Epoca", color=INK_SECONDARY, fontsize=10)
-    ax.set_ylabel("Huber loss ponderado (train)", color=INK_SECONDARY, fontsize=10)
+    ax.set_xlabel("Epoca (punto = mejor epoca restaurada; linea punteada = train)", color=INK_SECONDARY, fontsize=10)
+    ax.set_ylabel("Huber loss ponderado", color=INK_SECONDARY, fontsize=10)
     ax.set_title("MLP PyTorch — convergencia por funcion de activacion",
                  color=INK_PRIMARY, fontsize=12, fontweight="bold", loc="left")
     ax.legend(frameon=True, facecolor=SURFACE, edgecolor=GRID, framealpha=0.92,

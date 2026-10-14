@@ -15,6 +15,7 @@ data/raw/*.parquet
 data/raw/*.csv
 outputs/models/*.joblib
 outputs/models/*.pt
+outputs/models/checkpoints/
 outputs/reports/*.json
 outputs/reports/*.csv
 outputs/reports/*.duckdb

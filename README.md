@@ -592,15 +592,24 @@ explicit constraints — more than this single numeric result.
 
 ## 7.9 PyTorch MLP surrogate — activation comparison and benchmark vs. tree ensemble
 
-From an actual run of `train_deep_energy.py` on the same chronological
-split as §7.3 (3,672 train / 648 test), 120 epochs, identical architecture
-and seed per activation:
+From an actual run of `train_deep_energy.py` on the same chronological split as §7.3. The last
+15% of the training period is held out as validation (3,122 train / 550 validation /
+648 test). Each network trains for **at least 100 epochs** (at most 400); after that,
+early stopping ends the run when validation loss has not improved for 25 epochs and the best
+epoch's weights are restored. The learning rate halves when validation stalls. The full state is
+checkpointed every epoch, so an interrupted run resumes where it stopped. The activation is chosen
+on validation; test is looked at once, at the end.
 
-| Activation | Specific energy RMSE | Throughput RMSE | Overall R² |
-|---|---:|---:|---:|
-| ReLU | 0.690 | 103.87 | 0.545 |
-| GELU | 0.638 | 74.01 | 0.724 |
-| **Swish (SiLU)** | **0.635** | **66.01** | **0.758** |
+| Activation | Epochs run (best) | Validation R² | Specific energy RMSE | Throughput RMSE | Overall R² (test) |
+|---|---:|---:|---:|---:|---:|
+| ReLU | 138 (113) | 0.470 | 0.655 | 106.86 | 0.539 |
+| GELU | 189 (164) | 0.634 | 0.648 | 74.96 | 0.716 |
+| **Swish (SiLU)** | **268 (243)** | **0.682** | **0.609** | **67.81** | **0.760** |
+
+Compared with the previous fixed 120-epoch run (selected on test), the overall test R² barely moves
+(0.758 -> 0.760): specific energy improves (RMSE 0.635 -> 0.609) and throughput
+gets slightly worse (66.01 -> 67.81), with 15% less data to fit on. Longer training did not unlock a
+better network; it made the comparison clean, because the winner is no longer chosen by looking at test.
 
 ![Activation comparison](outputs/plots/deep_energy_activation_curves.png)
 
@@ -615,9 +624,9 @@ a general claim that Swish beats ReLU everywhere.
 
 | | Gradient Boosting (tree) | PyTorch MLP (Swish) |
 |---|---:|---:|
-| Specific energy RMSE | **0.600** | 0.635 |
-| Throughput RMSE | **56.93** | 66.01 |
-| Overall R² | **0.803** | 0.758 |
+| Specific energy RMSE | **0.600** | 0.609 |
+| Throughput RMSE | **56.93** | 67.81 |
+| Overall R² | **0.803** | 0.760 |
 
 ![Deep learning vs. tree ensemble](outputs/plots/deep_vs_tree_benchmark.png)
 
