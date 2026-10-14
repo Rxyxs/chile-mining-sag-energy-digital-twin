@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Predictive Digital Twin for SAG Mill Energy Efficiency in Copper Mining</title>
-<meta name="description" content="A digital twin that fuses noisy ore-hardness sensors with a **Kalman">
+<meta name="description" content="SAG mill digital twin: Kalman soft sensor, multi-output gradient boosting, and an energy bill priced with real Chilean marginal costs (CNE).">
 <style>
   :root { --bg:#FBFAF8; --surface:#FFF; --ink:#23201D; --muted:#6B645D; --line:#E3DED7; --accent:#B5553D; }
   @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
@@ -38,7 +38,7 @@
 <div class="wrap">
 <header>
 <h1>Predictive Digital Twin for SAG Mill Energy Efficiency in Copper Mining</h1>
-<p class="lede">A digital twin that fuses noisy ore-hardness sensors with a **Kalman</p>
+<p class="lede">A digital twin of a copper SAG mill: a Kalman filter fuses noisy ore-hardness sensors, gradient boosting predicts specific energy and throughput, and the energy bill is priced with <strong>real marginal costs from 95 monthly reports of Chile's energy commission</strong>. The plant is simulated, because no public SAG mill telemetry exists; the energy prices and the concentrator benchmark are real.</p>
 <div class="links">
 <a href="https://github.com/Rxyxs/chile-mining-sag-energy-digital-twin">Code and method</a>
 <a href="https://github.com/Rxyxs/chile-mining-sag-energy-digital-twin#readme">Full README</a>
@@ -63,16 +63,16 @@
 <h2>7.4 Feature importance (best model)</h2>
 <figure>
 <img src="figures/feature_importance.png" alt="Feature importance" loading="lazy">
-<figcaption>The single most important feature in the predictive model **is exactly</figcaption>
+<figcaption>The Kalman hardness estimate carries 74% of the model's feature importance, far ahead of fresh feed (10%) and P80 (6%): the soft sensor is what the model relies on.</figcaption>
 </figure>
 <h2>7.5 Learning curve and residuals</h2>
 <figure>
 <img src="figures/learning_curve.png" alt="Learning curve" loading="lazy">
-<figcaption>The validation curve stabilizes around R² ≈ 0.78-0.79 from ~500 training</figcaption>
+<figcaption>Validation R² climbs to about 0.76 with the full training set while training R² stays near 0.95: more data still helps, and the gap is the overfitting to watch.</figcaption>
 </figure>
 <figure>
 <img src="figures/residuals.png" alt="Residual diagnostics" loading="lazy">
-<figcaption>Residuals for both outputs are symmetrically distributed around zero with</figcaption>
+<figcaption>Residuals are centred near zero for both outputs (specific energy: mean −0.06, SD 0.60 kWh/t; throughput: mean +7.6, SD 56 t/h).</figcaption>
 </figure>
 <h2>7.6 Energy demand forecasting (24h ahead)</h2>
 <figure>
@@ -90,11 +90,27 @@
 <h2>7.9 PyTorch MLP surrogate — activation comparison and benchmark vs. tree ensemble</h2>
 <figure>
 <img src="figures/deep_energy_activation_curves.png" alt="Activation comparison" loading="lazy">
-<figcaption>Swish generalizes best of the three, narrowly ahead of GELU and clearly</figcaption>
+<figcaption>Each network trains at least 100 epochs with early stopping and per-epoch checkpoints; Swish wins on validation (R² 0.68) and stops at epoch 268 (best 243). On test: Swish R² 0.80 specific energy, 0.72 throughput; GELU (0.77, 0.66); ReLU (0.76, 0.31).</figcaption>
 </figure>
 <figure>
 <img src="figures/deep_vs_tree_benchmark.png" alt="Deep learning vs. tree ensemble" loading="lazy">
-<figcaption>The tree ensemble stays the production model — it beats the MLP on both</figcaption>
+<figcaption>The tree ensemble stays the production model: it beats the MLP on both outputs (average R² 0.80 against 0.76).</figcaption>
+</figure>
+<h2>7.10 Real-data anchoring: energy price and concentrator consumption</h2>
+<p>The mill's energy is priced at the real marginal cost of the Crucero 220 kV bus, read from 95 monthly
+reports of the Comisión Nacional de Energía (2018-02 to 2026-08), including image-only reports read with OCR.
+Where a month is both published and implied by another report's percentage change, the two agree within
+1.8% (98 pairs). Two reports that copied the previous month's figures were detected and discarded.</p>
+<figure>
+<img src="figures/real_energy_price.png" alt="Real marginal cost at Crucero 220 kV" loading="lazy">
+<figcaption>Average USD 63.8/MWh, median 55.1, from 29.2 to 189.5. At these prices a 1% efficiency gain
+is worth USD 89-215 thousand a year per line, not the fixed USD 155 thousand the project assumed before.</figcaption>
+</figure>
+<figure>
+<img src="figures/concentrator_check.png" alt="Simulated grinding against real concentrator consumption" loading="lazy">
+<figcaption>Cochilco's chart of electricity per tonne in Chile's copper concentrators, read from the PDF's vector
+coordinates: 21.2 kWh/t in 2024. The simulated grinding circuit uses 10.8 kWh/t,
+51% of that, a plausible share. A consistency check, not a calibration.</figcaption>
 </figure>
 <footer>
 Pablo Reyes · <a href="https://github.com/Rxyxs/chile-mining-sag-energy-digital-twin">github.com/Rxyxs/chile-mining-sag-energy-digital-twin</a> · MIT<br><br>

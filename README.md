@@ -16,8 +16,8 @@
 ![SHAP](https://img.shields.io/badge/SHAP-explainability-FF4B4B?style=flat)
 ![FastAPI](https://img.shields.io/badge/FastAPI-service-009688?style=flat&logo=fastapi&logoColor=white)
 ![Matplotlib](https://img.shields.io/badge/Matplotlib-3.8%2B-11557C?style=flat)
-![Pytest](https://img.shields.io/badge/tests-40%20passing-brightgreen?style=flat&logo=pytest&logoColor=white)
-![Status](https://img.shields.io/badge/status-research%20%2F%20synthetic%20data-lightgrey?style=flat)
+![Pytest](https://img.shields.io/badge/tests-56%20passing-brightgreen?style=flat&logo=pytest&logoColor=white)
+![Status](https://img.shields.io/badge/data-simulated%20plant%20%2B%20real%20CNE%20prices-lightgrey?style=flat)
 
 A digital twin that fuses noisy ore-hardness sensors with a **Kalman
 Filter**, jointly predicts a SAG mill's **specific energy and throughput**
@@ -53,20 +53,20 @@ proxies (power, vibration) plus a lab assay that arrives hours later. The
 typical result is a mill that reacts to its own installed capacity instead
 of anticipating it.
 
-**Illustrative economic impact** (computed from this project's own output
-after actually running it, not a brochure figure): this repository's
-reference simulation produces an average power draw of **25.3 MW** on a
-28 MW installed SAG mill. At a representative industrial electricity cost
-of ~USD 70/MWh (a range commonly cited for large-mining supply contracts in
-Chile), that implies an annual energy bill on the order of **USD 15.5
-million for a single SAG line**. A mere **1% improvement in specific
-energy efficiency** — the kind of gain a soft-sensor and a predictive
-setpoint model can realistically capture — would be worth roughly
-**USD 155,000/year per line**; a large operation running several SAG
-lines scales that figure accordingly. This calculation is deliberately
-illustrative (it is not any specific site's ROI); the point is that in
-comminution, fractions of a percentage point of energy efficiency are real
-money, not a rounding error.
+**Illustrative economic impact, priced with real data.** This repository's reference
+simulation produces an average power draw of **25.3 MW** on a 28 MW installed
+SAG mill, or about **221 GWh per year**. That energy is priced at the
+**real marginal cost of the Crucero 220 kV bus**, the reference node of the northern mining grid, taken
+from 95 monthly reports of the Comisión Nacional de Energía (2018-02 to 2026-08; section 7.10).
+The price averaged **USD 63.8/MWh** (median 55.1), but swung from 29.2 to
+189.5, so the same mill's annual energy bill ranges from **USD 8.9 million** (P10 price) to
+**USD 21.5 million** (P90), with **USD 12.2 million** at the median. A **1% gain in
+specific energy efficiency** is worth **USD 89 to 215 thousand per year per line**.
+The project previously assumed a flat USD 70/MWh (USD 15.5 million and USD 155,000/year); real prices put
+the median 21% below that assumption, and show that the value of efficiency
+more than doubles between a cheap and an expensive year. The marginal cost is the system spot price: large
+mines buy most of their energy under long-term contracts, so this is the opportunity cost of the energy
+saved, not any site's tariff, and the plant itself is still simulated.
 
 ## 2.1 Business Impact & Key Performance Indicators
 
@@ -74,7 +74,7 @@ money, not a rounding error.
 |---|---|---|
 | Best multi-output model (specific energy + throughput) | Gradient Boosting, R² 0.803 avg | Beat even hyperparameter-tuned LightGBM -- an empirical result, not assumed in advance |
 | 24h-ahead energy demand forecast | LightGBM RMSE 2.767 MW vs. Holt-Winters 3.822 MW | **27.6%** RMSE reduction, **33.5%** MAPE reduction -- lags capture hardness-regime transitions a seasonal-only model can't |
-| Illustrative annual value of 1% efficiency gain | ~USD 155,000/year per SAG line | On an estimated ~USD 15.5M/year energy bill for a single line -- fractions of a percent are real money in comminution |
+| Annual value of a 1% efficiency gain, at real prices | USD 89k-215k/year per SAG line (USD 122k at the median) | Priced with 95 months of real Crucero 220 kV marginal costs (CNE); the old flat USD 70/MWh assumption overstated the median by 27% |
 | Real calibration bug caught and fixed | P80 parameter miscalibration (57% of values clipped) → fixed | Traced via a residual-plot diagonal artifact; balanced R² split 0.58/0.94 → 0.80/0.81 after the fix |
 
 ---
@@ -592,15 +592,24 @@ explicit constraints — more than this single numeric result.
 
 ## 7.9 PyTorch MLP surrogate — activation comparison and benchmark vs. tree ensemble
 
-From an actual run of `train_deep_energy.py` on the same chronological
-split as §7.3 (3,672 train / 648 test), 120 epochs, identical architecture
-and seed per activation:
+From an actual run of `train_deep_energy.py` on the same chronological split as §7.3. The last
+15% of the training period is held out as validation (3,122 train / 550 validation /
+648 test). Each network trains for **at least 100 epochs** (at most 400); after that,
+early stopping ends the run when validation loss has not improved for 25 epochs and the best
+epoch's weights are restored. The learning rate halves when validation stalls. The full state is
+checkpointed every epoch, so an interrupted run resumes where it stopped. The activation is chosen
+on validation; test is looked at once, at the end.
 
-| Activation | Specific energy RMSE | Throughput RMSE | Overall R² |
-|---|---:|---:|---:|
-| ReLU | 0.690 | 103.87 | 0.545 |
-| GELU | 0.638 | 74.01 | 0.724 |
-| **Swish (SiLU)** | **0.635** | **66.01** | **0.758** |
+| Activation | Epochs run (best) | Validation R² | Specific energy RMSE | Throughput RMSE | Overall R² (test) |
+|---|---:|---:|---:|---:|---:|
+| ReLU | 138 (113) | 0.470 | 0.655 | 106.86 | 0.539 |
+| GELU | 189 (164) | 0.634 | 0.648 | 74.96 | 0.716 |
+| **Swish (SiLU)** | **268 (243)** | **0.682** | **0.609** | **67.81** | **0.760** |
+
+Compared with the previous fixed 120-epoch run (selected on test), the overall test R² barely moves
+(0.758 -> 0.760): specific energy improves (RMSE 0.635 -> 0.609) and throughput
+gets slightly worse (66.01 -> 67.81), with 15% less data to fit on. Longer training did not unlock a
+better network; it made the comparison clean, because the winner is no longer chosen by looking at test.
 
 ![Activation comparison](outputs/plots/deep_energy_activation_curves.png)
 
@@ -615,9 +624,9 @@ a general claim that Swish beats ReLU everywhere.
 
 | | Gradient Boosting (tree) | PyTorch MLP (Swish) |
 |---|---:|---:|
-| Specific energy RMSE | **0.600** | 0.635 |
-| Throughput RMSE | **56.93** | 66.01 |
-| Overall R² | **0.803** | 0.758 |
+| Specific energy RMSE | **0.600** | 0.609 |
+| Throughput RMSE | **56.93** | 67.81 |
+| Overall R² | **0.803** | 0.760 |
 
 ![Deep learning vs. tree ensemble](outputs/plots/deep_vs_tree_benchmark.png)
 
@@ -632,6 +641,50 @@ are additionally persisted to a local DuckDB table
 analysis.
 
 ---
+
+## 7.10 Real-data anchoring: energy price (CNE) and concentrator consumption (Cochilco)
+
+There is no public SCADA dataset of a real SAG mill: the Kaggle, Zenodo and Mendeley searches and the
+papers that use plant data (Copper Mountain, an Australian gold mine, a 2026 Chilean copper study) do not
+release it. So the plant stays simulated, but the two magnitudes that define the economic problem come
+from official Chilean sources, extracted by [`src/data/real_sources.py`](src/data/real_sources.py) and
+versioned in [`data/real/`](data/real/).
+
+**Energy price.** The Comisión Nacional de Energía publishes a monthly PDF report; each one states the
+previous month's average marginal cost at the Crucero 220 kV bus. The extractor reads three layouts: a
+sentence, a table (value plus monthly and annual change) and image-only reports read with OCR (RapidOCR).
+The monthly and annual changes let a report reconstruct months whose own report is missing.
+
+- **95 months, 2018-02 to 2026-08**: 72 published in their own report
+  (53 from tables, 8 from text, 11 by OCR) and 23
+  reconstructed from another report's percentage changes.
+- **Cross-validation of the extraction.** In 98 cases a month is both published and implied by a
+  different report; they agree with a median difference of 0.0%, a P95 of
+  0.3% and a maximum of 1.8%. The 15 OCR
+  pairs differ by at most 0.18%.
+- **The source has errors, and they are caught.** Two reports repeat the previous month's sentence word for
+  word, changing only the month name (RMensual_v201910.pdf, RMensual_v202401.pdf). The extractor flags any report whose
+  value and change equal the previous month's and discards everything derived from it. A test reproduces
+  the case.
+
+![Real energy price](outputs/plots/real_energy_price.png)
+
+The June 2022 peak (USD 189.5/MWh) is confirmed by two independent reports: the July report publishes it
+and the August report implies it from its own monthly change. Yearly averages: 2018 53.2, 2019 45.5, 2020 39.6, 2021 72.4, 2022 102.1, 2023 80.0, 2024 59.5, 2025 67.5, 2026 58.7 USD/MWh.
+
+**Concentrator consumption.** Cochilco's 2024 energy report publishes the electricity used per tonne of
+ore processed in Chile's copper concentrators only as a chart. The chart is vector graphics, so the 15
+yearly points (2010-2024) are read from the PDF coordinates and calibrated against the axis gridlines
+(70 and 85 MJ/t): 20.2 to 23.0 kWh/t, 21.2 in 2024.
+
+![Concentrator check](outputs/plots/concentrator_check.png)
+
+The simulated grinding circuit uses **10.8 kWh/t** on average (P10-P90
+8.5-13.1), **51% of a real
+concentrator's electricity**. The rest of a concentrator (crushing, flotation, regrinding, thickening,
+pumping) has to fit in the remaining half, so the simulator's scale is plausible. This is a consistency
+check, not a calibration: the simulator was not tuned to hit it, and a national average says nothing about
+a specific plant's ore.
 
 # 8. Conclusion
 
@@ -674,7 +727,7 @@ analysis.
   the SHAP explanation alongside every served prediction, not just the
   number, so operators can audit *why* the model recommends what it does.
 - **The central limitation, and the most important one to name**: the
-  data is synthetic, generated by this repository itself from Bond's Law
+  plant data is synthetic (energy prices and concentrator consumption are real, section 7.10), generated by this repository itself from Bond's Law
   plus operational noise — not proprietary SCADA telemetry from any site,
   and the survival dataset is synthetic on top of synthetic (simulated
   failure times over a simulated operating history). The metrics show the
