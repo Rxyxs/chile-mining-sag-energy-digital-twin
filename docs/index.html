@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Predictive Digital Twin for SAG Mill Energy Efficiency in Copper Mining</title>
-<meta name="description" content="SAG mill digital twin: Kalman soft sensor, multi-output gradient boosting, and an energy bill priced with real Chilean marginal costs (CNE).">
+<meta name="description" content="A digital twin of a copper SAG mill: a Kalman filter fuses noisy ore-hardness sensors, gradient boosting predicts specific energy and throughput, and the energy bill is priced with">
 <style>
   :root { --bg:#FBFAF8; --surface:#FFF; --ink:#23201D; --muted:#6B645D; --line:#E3DED7; --accent:#B5553D; }
   @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
@@ -54,7 +54,7 @@
 <h2>7.2 Exploratory analysis — correlations</h2>
 <figure>
 <img src="figures/correlation_heatmap.png" alt="Correlation matrix" loading="lazy">
-<figcaption>The Kalman estimate (<code>wi_hat</code>) correlates 0.89 with true specific energy</figcaption>
+<figcaption>The Kalman estimate (<code>wi_hat</code>) correlates 0.89 with true specific energy and −0.67 with throughput — consistent with Bond&#x27;s physics: harder ore demands more energy per tonne and, under a fixed power ceiling, forces throughput down. <code>fresh_feed_tph</code> and <code>throughput_tph</code> correlate at only 0.42 (not 1.0): the gap is exactly the regime where installed power, not the feeder setpoint, is the binding constraint.</figcaption>
 </figure>
 <h2>7.3 Multi-output model — model comparison</h2>
 <figure>
@@ -63,16 +63,16 @@
 <h2>7.4 Feature importance (best model)</h2>
 <figure>
 <img src="figures/feature_importance.png" alt="Feature importance" loading="lazy">
-<figcaption>The Kalman hardness estimate carries 74% of the model's feature importance, far ahead of fresh feed (10%) and P80 (6%): the soft sensor is what the model relies on.</figcaption>
+<figcaption>The single most important feature in the predictive model <strong>is exactly what the Kalman Filter produces</strong>: the soft sensor isn&#x27;t an isolated academic exercise — it&#x27;s the signal that most explains the mill&#x27;s energy consumption.</figcaption>
 </figure>
 <h2>7.5 Learning curve and residuals</h2>
 <figure>
 <img src="figures/learning_curve.png" alt="Learning curve" loading="lazy">
-<figcaption>Validation R² climbs to about 0.76 with the full training set while training R² stays near 0.95: more data still helps, and the gap is the overfitting to watch.</figcaption>
+<figcaption>The validation curve stabilizes around R² ≈ 0.78-0.79 from ~500 training records onward, with a moderate gap versus training performance (R² ≈ 0.96-1.00) — a sign of controlled variance, not severe overfitting.</figcaption>
 </figure>
 <figure>
 <img src="figures/residuals.png" alt="Residual diagnostics" loading="lazy">
-<figcaption>Residuals are centred near zero for both outputs (specific energy: mean −0.06, SD 0.60 kWh/t; throughput: mean +7.6, SD 56 t/h).</figcaption>
+<figcaption>Residuals for both outputs are symmetrically distributed around zero with no obvious systematic pattern against the prediction (reasonable homoscedasticity).</figcaption>
 </figure>
 <h2>7.6 Energy demand forecasting (24h ahead)</h2>
 <figure>
@@ -90,11 +90,11 @@
 <h2>7.9 PyTorch MLP surrogate — activation comparison and benchmark vs. tree ensemble</h2>
 <figure>
 <img src="figures/deep_energy_activation_curves.png" alt="Activation comparison" loading="lazy">
-<figcaption>Each network trains at least 100 epochs with early stopping and per-epoch checkpoints; Swish wins on validation (R² 0.68) and stops at epoch 268 (best 243). On test: Swish R² 0.80 specific energy, 0.72 throughput; GELU (0.77, 0.66); ReLU (0.76, 0.31).</figcaption>
+<figcaption>Swish generalizes best of the three, narrowly ahead of GELU and clearly ahead of ReLU on this architecture — consistent with the smooth, non-monotonic gradient near zero that both Swish and GELU share helping optimization more than ReLU&#x27;s hard zero cutoff does at this depth/width. This is an empirical result specific to this dataset and network size, not a general claim that Swish beats ReLU everywhere.</figcaption>
 </figure>
 <figure>
 <img src="figures/deep_vs_tree_benchmark.png" alt="Deep learning vs. tree ensemble" loading="lazy">
-<figcaption>The tree ensemble stays the production model: it beats the MLP on both outputs (average R² 0.80 against 0.76).</figcaption>
+<figcaption>The tree ensemble stays the production model — it beats the MLP on both targets — but the neural surrogate lands within ~5 points of R² using a completely different function class and no tree-specific feature engineering, which cross-validates that the tree model&#x27;s performance reflects a genuine, recoverable signal rather than an artifact of one algorithm family. All comparison metrics (tree models + MLP activations) are additionally persisted to a local DuckDB table (<code>outputs/reports/model_metrics.duckdb</code>, <code>model_comparison</code>) for ad-hoc SQL analysis.</figcaption>
 </figure>
 <h2>7.10 Real-data anchoring: energy price and concentrator consumption</h2>
 <p>The mill's energy is priced at the real marginal cost of the Crucero 220 kV bus, read from 95 monthly
@@ -103,14 +103,11 @@ Where a month is both published and implied by another report's percentage chang
 1.8% (98 pairs). Two reports that copied the previous month's figures were detected and discarded.</p>
 <figure>
 <img src="figures/real_energy_price.png" alt="Real marginal cost at Crucero 220 kV" loading="lazy">
-<figcaption>Average USD 63.8/MWh, median 55.1, from 29.2 to 189.5. At these prices a 1% efficiency gain
-is worth USD 89-215 thousand a year per line, not the fixed USD 155 thousand the project assumed before.</figcaption>
+<figcaption>The June 2022 peak (USD 189.5/MWh) is confirmed by two independent reports: the July report publishes it and the August report implies it from its own monthly change. Yearly averages: 2018 53.2, 2019 45.5, 2020 39.6, 2021 72.4, 2022 102.1, 2023 80.0, 2024 59.5, 2025 67.5, 2026 58.7 USD/MWh.</figcaption>
 </figure>
 <figure>
 <img src="figures/concentrator_check.png" alt="Simulated grinding against real concentrator consumption" loading="lazy">
-<figcaption>Cochilco's chart of electricity per tonne in Chile's copper concentrators, read from the PDF's vector
-coordinates: 21.2 kWh/t in 2024. The simulated grinding circuit uses 10.8 kWh/t,
-51% of that, a plausible share. A consistency check, not a calibration.</figcaption>
+<figcaption>The simulated grinding circuit uses <strong>10.8 kWh/t</strong> on average (P10-P90 8.5-13.1), <strong>51% of a real concentrator&#x27;s electricity</strong>. The rest of a concentrator (crushing, flotation, regrinding, thickening, pumping) has to fit in the remaining half, so the simulator&#x27;s scale is plausible. This is a consistency check, not a calibration: the simulator was not tuned to hit it, and a national average says nothing about a specific plant&#x27;s ore.</figcaption>
 </figure>
 <footer>
 Pablo Reyes · <a href="https://github.com/Rxyxs/chile-mining-sag-energy-digital-twin">github.com/Rxyxs/chile-mining-sag-energy-digital-twin</a> · MIT<br><br>
